@@ -1,53 +1,59 @@
 package window
 
 import "core:fmt"
+import "core:math"
 import "core:math/linalg"
+import "core:mem"
+import "core:os"
 import gl "vendor:OpenGL"
-
-MAX_LAYERS :: 32
-
-Layer :: struct {
-	space:   Layer_Space,
-	visible: bool,
-	verts:   [dynamic]Vertex,
-}
-
-Renderer :: struct {
-	program:     u32,
-	vao:         u32,
-	vbo:         u32,
-	proj_loc:    i32,
-	layers:      [MAX_LAYERS]Layer,
-	layer_count: int,
-}
+import stbtt "vendor:stb/truetype"
 
 @(private = "file")
 VERT_SRC :: `#version 330 core
 layout (location = 0) in vec2 a_pos;
-layout (location = 1) in vec4 a_color;
+layout (location = 1) in vec2 a_uv;
+layout (location = 2) in vec4 a_color;
+layout (location = 3) in float a_mode;
 
 uniform mat4 u_proj;
 
+out vec2 v_uv;
 out vec4 v_color;
+out float v_mode;
 
 void main() {
+	v_uv = a_uv;
 	v_color = a_color;
+	v_mode = a_mode;
 	gl_Position = u_proj * vec4(a_pos, 0.0, 1.0);
 }
 `
 
 @(private = "file")
 FRAG_SRC :: `#version 330 core
+in vec2 v_uv;
 in vec4 v_color;
+in float v_mode;
+
+uniform sampler2D u_atlas;
+
 out vec4 frag_color;
 
 void main() {
-	frag_color = v_color;
+	if (v_mode > 0.5) {
+		float alpha = texture(u_atlas, v_uv).r;
+		if (alpha <= 0.001) {
+			discard;
+		}
+		frag_color = vec4(v_color.rgb, v_color.a * alpha);
+	} else {
+		frag_color = v_color;
+	}
 }
 `
 
 @(private = "file")
-DIGIT_GLYPHS := [11][5]u8 {
+DIGIT_GLYPHS := [11][5]u8{
 	{0b111, 0b101, 0b101, 0b101, 0b111}, // 0
 	{0b010, 0b110, 0b010, 0b010, 0b111}, // 1
 	{0b111, 0b001, 0b111, 0b100, 0b111}, // 2
@@ -67,21 +73,36 @@ renderer_init :: proc() -> (r: Renderer, ok: bool) {
 		fmt.eprintln("Failed to compile 2D shader program")
 		return {}, false
 	}
+
 	r.program = program
 	r.proj_loc = gl.GetUniformLocation(r.program, "u_proj")
+	r.atlas_loc = gl.GetUniformLocation(r.program, "u_atlas")
+
 	gl.GenVertexArrays(1, &r.vao)
 	gl.GenBuffers(1, &r.vbo)
+
 	gl.BindVertexArray(r.vao)
 	gl.BindBuffer(gl.ARRAY_BUFFER, r.vbo)
+
 	gl.EnableVertexAttribArray(0)
 	gl.VertexAttribPointer(0, 2, gl.FLOAT, gl.FALSE, size_of(Vertex), offset_of(Vertex, pos))
+
 	gl.EnableVertexAttribArray(1)
-	gl.VertexAttribPointer(1, 4, gl.FLOAT, gl.FALSE, size_of(Vertex), offset_of(Vertex, color))
+	gl.VertexAttribPointer(1, 2, gl.FLOAT, gl.FALSE, size_of(Vertex), offset_of(Vertex, uv))
+
+	gl.EnableVertexAttribArray(2)
+	gl.VertexAttribPointer(2, 4, gl.FLOAT, gl.FALSE, size_of(Vertex), offset_of(Vertex, color))
+
+	gl.EnableVertexAttribArray(3)
+	gl.VertexAttribPointer(3, 1, gl.FLOAT, gl.FALSE, size_of(Vertex), offset_of(Vertex, mode))
+
 	gl.BindVertexArray(0)
+
 	// 2D painter's algorithm: disable depth testing, enable standard alpha blending.
 	gl.Disable(gl.DEPTH_TEST)
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
 	return r, true
 }
 
@@ -98,7 +119,157 @@ renderer_destroy :: proc(r: ^Renderer) {
 renderer_begin_frame :: proc(r: ^Renderer) {
 	for &l in r.layers[:r.layer_count] {
 		clear(&l.verts)
+		l.atlas_tex = 0
 	}
+}
+
+atlas_create :: proc(path: string, codepoints: []rune) -> (atlas: Glyph_Atlas, ok: bool) {
+	font_bytes, read_err := os.read_entire_file(path, context.allocator)
+	if read_err != nil {
+		fmt.eprintfln("Failed to read font file %s: %v", path, read_err)
+		return {}, false
+	}
+	defer delete(font_bytes)
+
+	font: stbtt.fontinfo
+	if !stbtt.InitFont(&font, raw_data(font_bytes), 0) {
+		fmt.eprintfln("Failed to initialize font: %s", path)
+		return {}, false
+	}
+
+	pixels := make([]u8, ATLAS_SIZE * ATLAS_SIZE)
+	defer delete(pixels)
+
+	atlas.glyphs = make(map[rune]Glyph_Metrics)
+
+	scale := stbtt.ScaleForMappingEmToPixels(&font, ATLAS_EM_PX)
+	gap := 8
+	pen_x := gap
+	pen_y := gap
+	row_h := 0
+
+	for cp in codepoints {
+		if cp in atlas.glyphs {
+			continue
+		}
+		glyph_idx := stbtt.FindGlyphIndex(&font, cp)
+		if glyph_idx == 0 {
+			continue
+		}
+
+		bm_w, bm_h, xoff, yoff: i32
+		bitmap := stbtt.GetGlyphBitmap(&font, scale, scale, glyph_idx, &bm_w, &bm_h, &xoff, &yoff)
+		if bitmap == nil {
+			continue
+		}
+		defer stbtt.FreeBitmap(bitmap, nil)
+
+		w := int(bm_w)
+		h := int(bm_h)
+		if pen_x + w + gap > ATLAS_SIZE {
+			pen_x = gap
+			pen_y += row_h + gap
+			row_h = 0
+		}
+		if pen_y + h + gap > ATLAS_SIZE {
+			fmt.eprintfln("Glyph atlas full while packing U+%04X", cp)
+			break
+		}
+
+		for row in 0 ..< h {
+			dst_off := (pen_y + row) * ATLAS_SIZE + pen_x
+			src_off := row * w
+			mem.copy(&pixels[dst_off], mem.ptr_offset(bitmap, src_off), w)
+		}
+
+		adv_i, lsb_i: i32
+		stbtt.GetGlyphHMetrics(&font, glyph_idx, &adv_i, &lsb_i)
+
+		atlas.glyphs[cp] = Glyph_Metrics{
+			u0      = f32(pen_x) / f32(ATLAS_SIZE),
+			v0      = f32(pen_y) / f32(ATLAS_SIZE),
+			u1      = f32(pen_x + w) / f32(ATLAS_SIZE),
+			v1      = f32(pen_y + h) / f32(ATLAS_SIZE),
+			x0      = f32(xoff) / ATLAS_EM_PX,
+			y0      = f32(yoff) / ATLAS_EM_PX,
+			x1      = f32(xoff + bm_w) / ATLAS_EM_PX,
+			y1      = f32(yoff + bm_h) / ATLAS_EM_PX,
+			advance = (f32(adv_i) * scale) / ATLAS_EM_PX,
+		}
+
+		pen_x += w + gap
+		if h > row_h {
+			row_h = h
+		}
+	}
+
+	gl.GenTextures(1, &atlas.tex)
+	gl.BindTexture(gl.TEXTURE_2D, atlas.tex)
+	gl.PixelStorei(gl.UNPACK_ALIGNMENT, 1)
+	gl.TexImage2D(
+		gl.TEXTURE_2D,
+		0,
+		gl.R8,
+		ATLAS_SIZE,
+		ATLAS_SIZE,
+		0,
+		gl.RED,
+		gl.UNSIGNED_BYTE,
+		raw_data(pixels),
+	)
+	gl.GenerateMipmap(gl.TEXTURE_2D)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+	gl.BindTexture(gl.TEXTURE_2D, 0)
+
+	return atlas, true
+}
+
+atlas_destroy :: proc(atlas: ^Glyph_Atlas) {
+	if atlas.tex != 0 {
+		gl.DeleteTextures(1, &atlas.tex)
+		atlas.tex = 0
+	}
+	delete(atlas.glyphs)
+}
+
+glyph_advance :: proc(atlas: ^Glyph_Atlas, cp: rune, em_size: f32) -> f32 {
+	if g, ok := atlas.glyphs[cp]; ok {
+		return g.advance * em_size
+	}
+	return 0
+}
+
+draw_glyph :: proc(
+	l: ^Layer,
+	atlas: ^Glyph_Atlas,
+	cp: rune,
+	origin_x, origin_y, em_size: f32,
+	color: [4]f32,
+) {
+	g, ok := atlas.glyphs[cp]
+	if !ok || atlas.tex == 0 {
+		return
+	}
+
+	l.atlas_tex = atlas.tex
+
+	x0 := origin_x + g.x0 * em_size
+	y0 := origin_y + g.y0 * em_size
+	x1 := origin_x + g.x1 * em_size
+	y1 := origin_y + g.y1 * em_size
+
+	append(
+		&l.verts,
+		Vertex{{x0, y0}, {g.u0, g.v0}, color, 1.0},
+		Vertex{{x1, y0}, {g.u1, g.v0}, color, 1.0},
+		Vertex{{x1, y1}, {g.u1, g.v1}, color, 1.0},
+		Vertex{{x0, y0}, {g.u0, g.v0}, color, 1.0},
+		Vertex{{x1, y1}, {g.u1, g.v1}, color, 1.0},
+		Vertex{{x0, y1}, {g.u0, g.v1}, color, 1.0},
+	)
 }
 
 screen_to_world :: proc(cam: Camera, win_w, win_h: f32, screen_pos: [2]f32) -> [2]f32 {
@@ -113,15 +284,89 @@ draw_rect :: proc(l: ^Layer, x, y, w, h: f32, color: [4]f32) {
 	y0 := y
 	x1 := x + w
 	y1 := y + h
+
 	append(
 		&l.verts,
-		Vertex{{x0, y0}, color},
-		Vertex{{x1, y0}, color},
-		Vertex{{x1, y1}, color},
-		Vertex{{x0, y0}, color},
-		Vertex{{x1, y1}, color},
-		Vertex{{x0, y1}, color},
+		Vertex{{x0, y0}, {0, 0}, color, 0.0},
+		Vertex{{x1, y0}, {0, 0}, color, 0.0},
+		Vertex{{x1, y1}, {0, 0}, color, 0.0},
+		Vertex{{x0, y0}, {0, 0}, color, 0.0},
+		Vertex{{x1, y1}, {0, 0}, color, 0.0},
+		Vertex{{x0, y1}, {0, 0}, color, 0.0},
 	)
+}
+
+draw_quad :: proc(l: ^Layer, p0, p1, p2, p3: [2]f32, color: [4]f32) {
+	append(
+		&l.verts,
+		Vertex{p0, {0, 0}, color, 0.0},
+		Vertex{p1, {0, 0}, color, 0.0},
+		Vertex{p2, {0, 0}, color, 0.0},
+		Vertex{p0, {0, 0}, color, 0.0},
+		Vertex{p2, {0, 0}, color, 0.0},
+		Vertex{p3, {0, 0}, color, 0.0},
+	)
+}
+
+draw_ellipse :: proc(
+	l: ^Layer,
+	cx, cy, rx, ry, angle_rad: f32,
+	color: [4]f32,
+	segments := 20,
+) {
+	cos_a := math.cos(angle_rad)
+	sin_a := math.sin(angle_rad)
+	center := [2]f32{cx, cy}
+	step := f32(math.TAU) / f32(segments)
+
+	prev := ellipse_point(cx, cy, rx, ry, cos_a, sin_a, 0)
+	for i in 1 ..= segments {
+		theta := f32(i) * step
+		curr := ellipse_point(cx, cy, rx, ry, cos_a, sin_a, theta)
+		append(
+			&l.verts,
+			Vertex{center, {0, 0}, color, 0.0},
+			Vertex{prev, {0, 0}, color, 0.0},
+			Vertex{curr, {0, 0}, color, 0.0},
+		)
+		prev = curr
+	}
+}
+
+draw_ring :: proc(
+	l: ^Layer,
+	cx, cy: f32,
+	outer_rx, outer_ry, outer_angle: f32,
+	inner_rx, inner_ry, inner_angle: f32,
+	color: [4]f32,
+	segments := 24,
+) {
+	oc := math.cos(outer_angle)
+	os := math.sin(outer_angle)
+	ic := math.cos(inner_angle)
+	is := math.sin(inner_angle)
+	step := f32(math.TAU) / f32(segments)
+
+	o_prev := ellipse_point(cx, cy, outer_rx, outer_ry, oc, os, 0)
+	i_prev := ellipse_point(cx, cy, inner_rx, inner_ry, ic, is, 0)
+	for i in 1 ..= segments {
+		theta := f32(i) * step
+		o_curr := ellipse_point(cx, cy, outer_rx, outer_ry, oc, os, theta)
+		i_curr := ellipse_point(cx, cy, inner_rx, inner_ry, ic, is, theta)
+		draw_quad(l, o_prev, o_curr, i_curr, i_prev, color)
+		o_prev = o_curr
+		i_prev = i_curr
+	}
+}
+
+@(private = "file")
+ellipse_point :: proc(cx, cy, rx, ry, cos_a, sin_a, theta: f32) -> [2]f32 {
+	lx := rx * math.cos(theta)
+	ly := ry * math.sin(theta)
+	return {
+		cx + lx * cos_a - ly * sin_a,
+		cy + lx * sin_a + ly * cos_a,
+	}
 }
 
 measure_int :: proc(value: int, pixel_size: f32) -> (w, h: f32) {
@@ -133,6 +378,7 @@ measure_int :: proc(value: int, pixel_size: f32) -> (w, h: f32) {
 draw_int :: proc(l: ^Layer, value: int, x, y, pixel_size: f32, color: [4]f32) {
 	buf: [16]int
 	count := format_int_glyphs(value, &buf)
+
 	cursor_x := x
 	for i in 0 ..< count {
 		glyph := DIGIT_GLYPHS[buf[i]]
@@ -174,7 +420,6 @@ format_int_glyphs :: proc(value: int, buf: ^[16]int) -> int {
 		v /= 10
 		n += 1
 	}
-	// Reverse digits in place
 	for lo, hi := start, n - 1; lo < hi; lo, hi = lo + 1, hi - 1 {
 		buf[lo], buf[hi] = buf[hi], buf[lo]
 	}
@@ -185,7 +430,9 @@ renderer_flush :: proc(r: ^Renderer, cam: Camera, win_w, win_h: f32) {
 	if win_w <= 0 || win_h <= 0 {
 		return
 	}
+
 	screen_proj := linalg.matrix_ortho3d_f32(0, win_w, win_h, 0, -1, 1)
+
 	half_w := (win_w * 0.5) / cam.zoom
 	half_h := (win_h * 0.5) / cam.zoom
 	world_proj := linalg.matrix_ortho3d_f32(
@@ -196,15 +443,25 @@ renderer_flush :: proc(r: ^Renderer, cam: Camera, win_w, win_h: f32) {
 		-1,
 		1,
 	)
+
 	gl.UseProgram(r.program)
+	gl.Uniform1i(r.atlas_loc, 0)
 	gl.BindVertexArray(r.vao)
 	gl.BindBuffer(gl.ARRAY_BUFFER, r.vbo)
+
 	for &l in r.layers[:r.layer_count] {
 		if !l.visible || len(l.verts) == 0 {
 			continue
 		}
+
+		if l.atlas_tex != 0 {
+			gl.ActiveTexture(gl.TEXTURE0)
+			gl.BindTexture(gl.TEXTURE_2D, l.atlas_tex)
+		}
+
 		proj := l.space == .Screen ? screen_proj : world_proj
 		gl.UniformMatrix4fv(r.proj_loc, 1, gl.FALSE, &proj[0, 0])
+
 		gl.BufferData(
 			gl.ARRAY_BUFFER,
 			len(l.verts) * size_of(Vertex),

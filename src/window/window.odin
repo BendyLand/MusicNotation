@@ -4,6 +4,10 @@ import "core:fmt"
 import gl "vendor:OpenGL"
 import sdl "vendor:sdl2"
 
+MAX_LAYERS :: 32
+ATLAS_SIZE  :: 1024
+ATLAS_EM_PX :: f32(128.0)
+
 Layer_Space :: enum {
 	World,
 	Screen,
@@ -11,12 +15,42 @@ Layer_Space :: enum {
 
 Vertex :: struct {
 	pos:   [2]f32,
+	uv:    [2]f32,
 	color: [4]f32,
+	mode:  f32, // 0.0 = solid geometry, 1.0 = SDF glyph
 }
 
 Camera :: struct {
 	pos:  [2]f32, // World coordinate at the center of the viewport (in points)
-	zoom: f32, // Pixels per world unit
+	zoom: f32,    // Pixels per world unit
+}
+
+Glyph_Metrics :: struct {
+	u0, v0, u1, v1: f32, // UV rect in atlas [0..1]
+	x0, y0, x1, y1: f32, // Quad bounds relative to glyph origin in em units
+	advance:        f32, // Horizontal advance in em units
+}
+
+Glyph_Atlas :: struct {
+	tex:    u32,
+	glyphs: map[rune]Glyph_Metrics,
+}
+
+Layer :: struct {
+	space:     Layer_Space,
+	visible:   bool,
+	atlas_tex: u32,
+	verts:     [dynamic]Vertex,
+}
+
+Renderer :: struct {
+	program:     u32,
+	vao:         u32,
+	vbo:         u32,
+	proj_loc:    i32,
+	atlas_loc:   i32,
+	layers:      [MAX_LAYERS]Layer,
+	layer_count: int,
 }
 
 Key :: enum {
