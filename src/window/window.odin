@@ -4,6 +4,21 @@ import "core:fmt"
 import gl "vendor:OpenGL"
 import sdl "vendor:sdl2"
 
+Layer_Space :: enum {
+	World,
+	Screen,
+}
+
+Vertex :: struct {
+	pos:   [2]f32,
+	color: [4]f32,
+}
+
+Camera :: struct {
+	pos:  [2]f32, // World coordinate at the center of the viewport (in points)
+	zoom: f32, // Pixels per world unit
+}
+
 Key :: enum {
 	Unknown,
 	Escape,
@@ -53,21 +68,6 @@ Event :: union {
 	Event_Mouse_Wheel,
 }
 
-Layer_Space :: enum {
-	World,
-	Screen,
-}
-
-Vertex :: struct {
-	pos:   [2]f32,
-	color: [4]f32,
-}
-
-Camera :: struct {
-	pos:  [2]f32, // World coordinate at the center of the viewport (in points)
-	zoom: f32, // Pixels per world unit
-}
-
 Window :: struct {
 	handle:            ^sdl.Window,
 	gl_ctx:            sdl.GLContext,
@@ -84,6 +84,7 @@ create :: proc(title: cstring, target_w, target_h, min_w, min_h: i32) -> (w: Win
 		fmt.eprintfln("SDL_Init failed: %s", sdl.GetError())
 		return {}, false
 	}
+
 	sdl.GL_SetAttribute(.CONTEXT_MAJOR_VERSION, 3)
 	sdl.GL_SetAttribute(.CONTEXT_MINOR_VERSION, 3)
 	sdl.GL_SetAttribute(.CONTEXT_PROFILE_MASK, i32(sdl.GLprofile.CORE))
@@ -91,7 +92,9 @@ create :: proc(title: cstring, target_w, target_h, min_w, min_h: i32) -> (w: Win
 	sdl.GL_SetAttribute(.DOUBLEBUFFER, 1)
 	sdl.GL_SetAttribute(.MULTISAMPLEBUFFERS, 1)
 	sdl.GL_SetAttribute(.MULTISAMPLESAMPLES, 4)
+
 	init_w, init_h := compute_initial_size(target_w, target_h, min_w, min_h)
+
 	handle := sdl.CreateWindow(
 		title,
 		sdl.WINDOWPOS_CENTERED,
@@ -105,6 +108,7 @@ create :: proc(title: cstring, target_w, target_h, min_w, min_h: i32) -> (w: Win
 		sdl.Quit()
 		return {}, false
 	}
+
 	gl_ctx := sdl.GL_CreateContext(handle)
 	if gl_ctx == nil {
 		fmt.eprintfln("GL_CreateContext failed: %s", sdl.GetError())
@@ -112,10 +116,13 @@ create :: proc(title: cstring, target_w, target_h, min_w, min_h: i32) -> (w: Win
 		sdl.Quit()
 		return {}, false
 	}
+
 	sdl.GL_MakeCurrent(handle, gl_ctx)
 	sdl.GL_SetSwapInterval(1)
+
 	gl.load_up_to(3, 3, sdl.gl_set_proc_address)
 	gl.Enable(gl.MULTISAMPLE)
+
 	renderer, r_ok := renderer_init()
 	if !r_ok {
 		sdl.GL_DeleteContext(gl_ctx)
@@ -123,9 +130,11 @@ create :: proc(title: cstring, target_w, target_h, min_w, min_h: i32) -> (w: Win
 		sdl.Quit()
 		return {}, false
 	}
+
 	// Lock min size before mapping so the WM centers the full portrait frame instead of clamping it.
 	sdl.SetWindowMinimumSize(handle, init_w, init_h)
 	sdl.ShowWindow(handle)
+
 	w.handle = handle
 	w.gl_ctx = gl_ctx
 	w.renderer = renderer
@@ -133,6 +142,7 @@ create :: proc(title: cstring, target_w, target_h, min_w, min_h: i32) -> (w: Win
 	w.min_h = min_h
 	sdl.GetWindowSize(handle, &w.win_w, &w.win_h)
 	sdl.GL_GetDrawableSize(handle, &w.draw_w, &w.draw_h)
+
 	return w, true
 }
 
@@ -144,25 +154,51 @@ destroy :: proc(w: ^Window) {
 	sdl.Quit()
 }
 
+ctrl_held :: proc() -> bool {
+	return (sdl.GetModState() & sdl.KMOD_CTRL) != {}
+}
+
+mouse_pos :: proc() -> [2]f32 {
+	x, y: i32
+	sdl.GetMouseState(&x, &y)
+	return {f32(x), f32(y)}
+}
+
 wait_events :: proc(w: ^Window) -> ([]Event, bool) {
 	clear(&w.events)
+
 	ev: sdl.Event
 	if !sdl.WaitEvent(&ev) {
 		return nil, false
 	}
+
 	for {
 		#partial switch ev.type {
 		case .QUIT:
 			append(&w.events, Event_Quit{})
+
 		case .KEYDOWN:
-			key := Key.Unknown
-			#partial switch ev.key.keysym.scancode {
-			case .ESCAPE:
-				key = .Escape
-			case .NUM0:
-				key = .Num_0
+			sc := ev.key.keysym.scancode
+			if (sc == .LCTRL || sc == .RCTRL) && ev.key.repeat == 0 {
+				append(&w.events, Event_Redraw{})
 			}
-			append(&w.events, Event_Key_Down{key = key})
+			else {
+				key := Key.Unknown
+				#partial switch sc {
+				case .ESCAPE:
+					key = .Escape
+				case .NUM0:
+					key = .Num_0
+				}
+				append(&w.events, Event_Key_Down{key = key})
+			}
+
+		case .KEYUP:
+			sc := ev.key.keysym.scancode
+			if sc == .LCTRL || sc == .RCTRL {
+				append(&w.events, Event_Redraw{})
+			}
+
 		case .MOUSEBUTTONDOWN:
 			append(
 				&w.events,
@@ -172,6 +208,7 @@ wait_events :: proc(w: ^Window) -> ([]Event, bool) {
 					y = ev.button.y,
 				},
 			)
+
 		case .MOUSEBUTTONUP:
 			append(
 				&w.events,
@@ -181,6 +218,7 @@ wait_events :: proc(w: ^Window) -> ([]Event, bool) {
 					y = ev.button.y,
 				},
 			)
+
 		case .MOUSEMOTION:
 			append(
 				&w.events,
@@ -191,8 +229,10 @@ wait_events :: proc(w: ^Window) -> ([]Event, bool) {
 					dy = ev.motion.yrel,
 				},
 			)
+
 		case .MOUSEWHEEL:
 			append(&w.events, Event_Mouse_Wheel{dy = ev.wheel.y})
+
 		case .WINDOWEVENT:
 			#partial switch ev.window.event {
 			case .EXPOSED, .FOCUS_GAINED:
@@ -201,6 +241,7 @@ wait_events :: proc(w: ^Window) -> ([]Event, bool) {
 					w.unlocked_min_size = true
 				}
 				append(&w.events, Event_Redraw{})
+
 			case .SIZE_CHANGED:
 				w.win_w = ev.window.data1
 				w.win_h = ev.window.data2
@@ -215,19 +256,23 @@ wait_events :: proc(w: ^Window) -> ([]Event, bool) {
 				append(&w.events, Event_Redraw{})
 			}
 		}
+
 		if !sdl.PollEvent(&ev) {
 			break
 		}
 	}
+
 	return w.events[:], true
 }
 
 begin_frame :: proc(w: ^Window, clear_color: [4]f32) {
 	sdl.GL_GetDrawableSize(w.handle, &w.draw_w, &w.draw_h)
 	sdl.GetWindowSize(w.handle, &w.win_w, &w.win_h)
+
 	gl.Viewport(0, 0, w.draw_w, w.draw_h)
 	gl.ClearColor(clear_color.r, clear_color.g, clear_color.b, clear_color.a)
 	gl.Clear(gl.COLOR_BUFFER_BIT)
+
 	renderer_begin_frame(&w.renderer)
 }
 
@@ -261,4 +306,3 @@ compute_initial_size :: proc(target_w, target_h, min_w, min_h: i32) -> (w, h: i3
 	scale := min(f32(1.0), f32(max_h) / f32(target_h), f32(max_w) / f32(target_w))
 	return i32(f32(target_w) * scale), i32(f32(target_h) * scale)
 }
-

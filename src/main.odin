@@ -45,17 +45,22 @@ main :: proc() {
 			mem.tracking_allocator_destroy(&track)
 		}
 	}
+
 	w, ok := win.create("Notation", TARGET_WIDTH, TARGET_HEIGHT, MIN_WIDTH, MIN_HEIGHT)
 	if !ok {
 		return
 	}
 	defer win.destroy(&w)
+
 	scene := win.scene_init(&w, .World, .World, .World, .Screen)
+
 	cam := win.Camera {
 		pos  = {PAGE_WIDTH * 0.5, PAGE_HEIGHT * 0.5},
 		zoom = 0.95,
 	}
+
 	draw_scene(&scene, cam)
+
 	panning := false
 	running := true
 	main_loop(&cam, &scene, &running, &panning)
@@ -97,6 +102,9 @@ main_loop :: proc(cam: ^win.Camera, scene: ^win.Scene, running, panning: ^bool) 
 					cam.pos.y -= f32(e.dy) / cam.zoom
 					needs_redraw = true
 				}
+				else if win.ctrl_held() {
+					needs_redraw = true
+				}
 			case win.Event_Mouse_Wheel:
 				if e.dy != 0 {
 					factor: f32 = e.dy > 0 ? 1.1 : (1.0 / 1.1)
@@ -113,11 +121,49 @@ main_loop :: proc(cam: ^win.Camera, scene: ^win.Scene, running, panning: ^bool) 
 
 draw_scene :: proc(s: ^win.Scene, cam: win.Camera) {
 	win.scene_begin(s, {0.22, 0.23, 0.25, 1.0})
+
 	draw_page(win.scene_layer(s, LAYER_PAGE))
 	draw_score(win.scene_layer(s, LAYER_SCORE))
 	draw_overlay(win.scene_layer(s, LAYER_OVERLAY))
 	draw_ui(win.scene_layer(s, LAYER_UI), f32(s.window.win_w), f32(s.window.win_h))
+
+	pushed_inspector := false
+	if win.ctrl_held() {
+		mouse := win.mouse_pos()
+		hovered := win.scene_hit_test(s, cam, mouse)
+		win.scene_push(s, .Screen)
+		draw_layer_badge(
+			win.scene_peek(s),
+			hovered,
+			mouse,
+			f32(s.window.win_w),
+			f32(s.window.win_h),
+		)
+		pushed_inspector = true
+	}
+
 	win.scene_end(s, cam)
+
+	if pushed_inspector {
+		win.scene_pop(s)
+	}
+}
+
+draw_layer_badge :: proc(l: ^win.Layer, layer_idx: int, mouse: [2]f32, win_w, win_h: f32) {
+	pixel_size: f32 = 3.0
+	pad_x: f32 = 8.0
+	pad_y: f32 = 6.0
+
+	num_w, num_h := win.measure_int(layer_idx, pixel_size)
+	box_w := num_w + pad_x * 2.0
+	box_h := num_h + pad_y * 2.0
+
+	x := clamp(mouse.x + 14.0, 4.0, max(4.0, win_w - box_w - 4.0))
+	y := clamp(mouse.y + 14.0, 4.0, max(4.0, win_h - box_h - 4.0))
+
+	win.draw_rect(l, x - 1.0, y - 1.0, box_w + 2.0, box_h + 2.0, {0.35, 0.60, 1.0, 0.85})
+	win.draw_rect(l, x, y, box_w, box_h, {0.10, 0.11, 0.14, 0.94})
+	win.draw_int(l, layer_idx, x + pad_x, y + pad_y, pixel_size, {0.95, 0.96, 0.98, 1.0})
 }
 
 draw_page :: proc(l: ^win.Layer) {
@@ -146,4 +192,3 @@ draw_ui :: proc(l: ^win.Layer, win_w, win_h: f32) {
 	win.draw_rect(l, 0, toolbar_h, win_w, 1.0, {0.08, 0.08, 0.10, 1.0})
 	win.draw_rect(l, 0, win_h - status_h, win_w, status_h, {0.14, 0.15, 0.17, 0.96})
 }
-

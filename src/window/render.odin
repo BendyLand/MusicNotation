@@ -17,8 +17,8 @@ Renderer :: struct {
 	vao:         u32,
 	vbo:         u32,
 	proj_loc:    i32,
-	layer_count: int,
 	layers:      [MAX_LAYERS]Layer,
+	layer_count: int,
 }
 
 @(private = "file")
@@ -45,6 +45,21 @@ void main() {
 	frag_color = v_color;
 }
 `
+
+@(private = "file")
+DIGIT_GLYPHS := [11][5]u8 {
+	{0b111, 0b101, 0b101, 0b101, 0b111}, // 0
+	{0b010, 0b110, 0b010, 0b010, 0b111}, // 1
+	{0b111, 0b001, 0b111, 0b100, 0b111}, // 2
+	{0b111, 0b001, 0b111, 0b001, 0b111}, // 3
+	{0b101, 0b101, 0b111, 0b001, 0b001}, // 4
+	{0b111, 0b100, 0b111, 0b001, 0b111}, // 5
+	{0b111, 0b100, 0b111, 0b101, 0b111}, // 6
+	{0b111, 0b001, 0b001, 0b010, 0b010}, // 7
+	{0b111, 0b101, 0b111, 0b101, 0b111}, // 8
+	{0b111, 0b101, 0b111, 0b001, 0b111}, // 9
+	{0b000, 0b000, 0b111, 0b000, 0b000}, // -
+}
 
 renderer_init :: proc() -> (r: Renderer, ok: bool) {
 	program, shader_ok := gl.load_shaders_source(VERT_SRC, FRAG_SRC)
@@ -86,6 +101,13 @@ renderer_begin_frame :: proc(r: ^Renderer) {
 	}
 }
 
+screen_to_world :: proc(cam: Camera, win_w, win_h: f32, screen_pos: [2]f32) -> [2]f32 {
+	return {
+		cam.pos.x + (screen_pos.x - win_w * 0.5) / cam.zoom,
+		cam.pos.y + (screen_pos.y - win_h * 0.5) / cam.zoom,
+	}
+}
+
 draw_rect :: proc(l: ^Layer, x, y, w, h: f32, color: [4]f32) {
 	x0 := x
 	y0 := y
@@ -100,6 +122,63 @@ draw_rect :: proc(l: ^Layer, x, y, w, h: f32, color: [4]f32) {
 		Vertex{{x1, y1}, color},
 		Vertex{{x0, y1}, color},
 	)
+}
+
+measure_int :: proc(value: int, pixel_size: f32) -> (w, h: f32) {
+	buf: [16]int
+	count := format_int_glyphs(value, &buf)
+	return f32(count * 4 - 1) * pixel_size, 5.0 * pixel_size
+}
+
+draw_int :: proc(l: ^Layer, value: int, x, y, pixel_size: f32, color: [4]f32) {
+	buf: [16]int
+	count := format_int_glyphs(value, &buf)
+	cursor_x := x
+	for i in 0 ..< count {
+		glyph := DIGIT_GLYPHS[buf[i]]
+		for row in 0 ..< 5 {
+			bits := glyph[row]
+			for col in 0 ..< 3 {
+				if (bits & (1 << u8(2 - col))) != 0 {
+					draw_rect(
+						l,
+						cursor_x + f32(col) * pixel_size,
+						y + f32(row) * pixel_size,
+						pixel_size,
+						pixel_size,
+						color,
+					)
+				}
+			}
+		}
+		cursor_x += 4.0 * pixel_size
+	}
+}
+
+@(private = "file")
+format_int_glyphs :: proc(value: int, buf: ^[16]int) -> int {
+	n := 0
+	v := value
+	if v == 0 {
+		buf[0] = 0
+		return 1
+	}
+	if v < 0 {
+		buf[0] = 10 // '-'
+		n = 1
+		v = -v
+	}
+	start := n
+	for v > 0 && n < len(buf) {
+		buf[n] = v % 10
+		v /= 10
+		n += 1
+	}
+	// Reverse digits in place
+	for lo, hi := start, n - 1; lo < hi; lo, hi = lo + 1, hi - 1 {
+		buf[lo], buf[hi] = buf[hi], buf[lo]
+	}
+	return n
 }
 
 renderer_flush :: proc(r: ^Renderer, cam: Camera, win_w, win_h: f32) {
@@ -137,4 +216,3 @@ renderer_flush :: proc(r: ^Renderer, cam: Camera, win_w, win_h: f32) {
 	gl.BindVertexArray(0)
 	gl.UseProgram(0)
 }
-
