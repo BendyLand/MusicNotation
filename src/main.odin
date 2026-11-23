@@ -1,132 +1,153 @@
 package main
 
 import "core:fmt"
-import gl "vendor:OpenGL"
-import sdl "vendor:sdl2"
+import "core:mem"
+import win "window"
 
 TARGET_WIDTH :: 800
 TARGET_HEIGHT :: 900
 MIN_WIDTH :: 320
 MIN_HEIGHT :: 240
 
+// US Letter in PostScript points (8.5 x 11 inches at 72 pt/in).
+PAGE_WIDTH :: 612.0
+PAGE_HEIGHT :: 792.0
+
+MARGIN_X :: 54.0
+STAFF_Y :: 120.0
+STAFF_SPACE :: 6.0
+LINE_THICK :: 0.8
+STAFF_H :: 4.0 * STAFF_SPACE + LINE_THICK
+
 main :: proc() {
-	render_window(TARGET_WIDTH, TARGET_HEIGHT, MIN_WIDTH, MIN_HEIGHT)
+	when ODIN_DEBUG {
+		track: mem.Tracking_Allocator
+		mem.tracking_allocator_init(&track, context.allocator)
+		context.allocator = mem.tracking_allocator(&track)
+		defer {
+			if len(track.allocation_map) > 0 {
+				fmt.eprintfln("=== %v allocations not freed: ===", len(track.allocation_map))
+				for _, entry in track.allocation_map {
+					fmt.eprintfln("- %v bytes @ %v", entry.size, entry.location)
+				}
+			}
+			if len(track.bad_free_array) > 0 {
+				fmt.eprintfln("=== %v incorrect frees: ===", len(track.bad_free_array))
+				for entry in track.bad_free_array {
+					fmt.eprintfln("- %p @ %v", entry.memory, entry.location)
+				}
+			}
+			mem.tracking_allocator_destroy(&track)
+		}
+	}
+	w, ok := win.create("Notation", TARGET_WIDTH, TARGET_HEIGHT, MIN_WIDTH, MIN_HEIGHT)
+	if !ok {
+		return
+	}
+	defer win.destroy(&w)
+	layers := win.Scene_Layers {
+		page    = win.add_layer(&w, .World),
+		score   = win.add_layer(&w, .World),
+		overlay = win.add_layer(&w, .World),
+		ui      = win.add_layer(&w, .Screen),
+	}
+	cam := win.Camera {
+		pos  = {PAGE_WIDTH * 0.5, PAGE_HEIGHT * 0.5},
+		zoom = 0.95,
+	}
+	draw_scene(&w, layers, cam)
+	panning := false
+	running := true
+	main_loop(&cam, &w, layers, &running, &panning)
 }
 
-render_window :: proc(target_width, target_height, min_width, min_height: i32) {
-	if sdl.Init({.VIDEO}) != 0 {
-		fmt.eprintfln("SDL_Init failed: %s", sdl.GetError())
-		return
-	}
-	defer sdl.Quit()
-	sdl.GL_SetAttribute(.CONTEXT_MAJOR_VERSION, 3)
-	sdl.GL_SetAttribute(.CONTEXT_MINOR_VERSION, 3)
-	sdl.GL_SetAttribute(.CONTEXT_PROFILE_MASK, i32(sdl.GLprofile.CORE))
-	sdl.GL_SetAttribute(.CONTEXT_FLAGS, i32(sdl.GLcontextFlag.FORWARD_COMPATIBLE_FLAG))
-	sdl.GL_SetAttribute(.DOUBLEBUFFER, 1)
-	sdl.GL_SetAttribute(.MULTISAMPLEBUFFERS, 1)
-	sdl.GL_SetAttribute(.MULTISAMPLESAMPLES, 4)
-	init_w, init_h := compute_initial_size(target_width, target_height)
-	window := sdl.CreateWindow(
-		"Notation",
-		sdl.WINDOWPOS_CENTERED,
-		sdl.WINDOWPOS_CENTERED,
-		init_w,
-		init_h,
-		{.OPENGL, .RESIZABLE, .ALLOW_HIGHDPI, .HIDDEN},
-	)
-	if window == nil {
-		fmt.eprintfln("CreateWindow failed: %s", sdl.GetError())
-		return
-	}
-	defer sdl.DestroyWindow(window)
-	gl_ctx := sdl.GL_CreateContext(window)
-	if gl_ctx == nil {
-		fmt.eprintfln("GL_CreateContext failed: %s", sdl.GetError())
-		return
-	}
-	defer sdl.GL_DeleteContext(gl_ctx)
-	sdl.GL_MakeCurrent(window, gl_ctx)
-	sdl.GL_SetSwapInterval(1)
-	gl.load_up_to(3, 3, sdl.gl_set_proc_address)
-	gl.Enable(gl.MULTISAMPLE)
-	// Lock min size before mapping so the WM centers the full portrait frame instead of clamping it.
-	sdl.SetWindowMinimumSize(window, init_w, init_h)
-	sdl.ShowWindow(window)
-	// Draw and swap the initial buffer immediately (required on Wayland to complete mapping).
-	render_frame(window)
-	unlocked_min_size := false
-	running := true
-	needs_redraw := false
-	for running {
-		event: sdl.Event
-		if !sdl.WaitEvent(&event) {
+main_loop :: proc(
+	cam: ^win.Camera,
+	w: ^win.Window,
+	layers: win.Scene_Layers,
+	running, panning: ^bool,
+) {
+	for running^ {
+		events, wait_ok := win.wait_events(w)
+		if !wait_ok {
 			break
 		}
-		for {
-			#partial switch event.type {
-			case .QUIT:
-				running = false
-			case .KEYDOWN:
-				if event.key.keysym.scancode == .ESCAPE {
-					running = false
-				}
+		needs_redraw := false
+		for event in events {
+			switch e in event {
+			case win.Event_Quit:
+				running^ = false
+			case win.Event_Redraw:
 				needs_redraw = true
-			case .WINDOWEVENT:
-				#partial switch event.window.event {
-				case .EXPOSED, .FOCUS_GAINED:
-					if !unlocked_min_size {
-						sdl.SetWindowMinimumSize(window, min_width, min_height)
-						unlocked_min_size = true
-					}
-					needs_redraw = true
-				case .SIZE_CHANGED:
-					drawable_w, drawable_h: i32
-					sdl.GL_GetDrawableSize(window, &drawable_w, &drawable_h)
-					fmt.printfln(
-						"Resized: %dx%d (drawable: %dx%d)",
-						event.window.data1,
-						event.window.data2,
-						drawable_w,
-						drawable_h,
-					)
+			case win.Event_Key_Down:
+				#partial switch e.key {
+				case .Escape:
+					running^ = false
+				case .Num_0:
+					cam.pos = {PAGE_WIDTH * 0.5, PAGE_HEIGHT * 0.5}
+					cam.zoom = 0.95
 					needs_redraw = true
 				}
-			case .MOUSEBUTTONDOWN, .MOUSEBUTTONUP, .MOUSEMOTION, .MOUSEWHEEL:
-				needs_redraw = true
-			}
-			if !sdl.PollEvent(&event) {
-				break
+			case win.Event_Mouse_Down:
+				if e.button == .Left || e.button == .Middle {
+					panning^ = true
+				}
+			case win.Event_Mouse_Up:
+				if e.button == .Left || e.button == .Middle {
+					panning^ = false
+				}
+			case win.Event_Mouse_Move:
+				if panning^ {
+					cam.pos.x -= f32(e.dx) / cam.zoom
+					cam.pos.y -= f32(e.dy) / cam.zoom
+					needs_redraw = true
+				}
+			case win.Event_Mouse_Wheel:
+				if e.dy != 0 {
+					factor: f32 = e.dy > 0 ? 1.1 : (1.0 / 1.1)
+					cam.zoom = clamp(cam.zoom * factor, 0.25, 8.0)
+					needs_redraw = true
+				}
 			}
 		}
-		if running && needs_redraw {
-			render_frame(window)
-			needs_redraw = false
+		if running^ && needs_redraw {
+			draw_scene(w, layers, cam^)
 		}
 	}
 }
 
-compute_initial_size :: proc(target_w, target_h: i32) -> (w, h: i32) {
-	usable: sdl.Rect
-	if sdl.GetDisplayUsableBounds(0, &usable) != 0 {
-		return target_w, target_h
-	}
-
-	// Leave room for OS panels/decorations if running on a smaller display, preserving aspect ratio.
-	max_h := max(i32(MIN_HEIGHT), usable.h - 80)
-	max_w := max(i32(MIN_WIDTH), usable.w - 80)
-
-	scale := min(f32(1.0), f32(max_h) / f32(target_h), f32(max_w) / f32(target_w))
-	return i32(f32(target_w) * scale), i32(f32(target_h) * scale)
+draw_scene :: proc(w: ^win.Window, layers: win.Scene_Layers, cam: win.Camera) {
+	win.begin_frame(w, {0.22, 0.23, 0.25, 1.0})
+	draw_page(win.layer(w, layers.page))
+	draw_score(win.layer(w, layers.score))
+	draw_overlay(win.layer(w, layers.overlay))
+	draw_ui(win.layer(w, layers.ui), f32(w.win_w), f32(w.win_h))
+	win.end_frame(w, cam)
 }
 
-render_frame :: proc(window: ^sdl.Window) {
-	w, h: i32
-	sdl.GL_GetDrawableSize(window, &w, &h)
+draw_page :: proc(l: ^win.Layer) {
+	win.draw_rect(l, 6, 8, PAGE_WIDTH, PAGE_HEIGHT, {0.0, 0.0, 0.0, 0.28})
+	win.draw_rect(l, 0, 0, PAGE_WIDTH, PAGE_HEIGHT, {0.98, 0.97, 0.94, 1.0})
+}
 
-	gl.Viewport(0, 0, w, h)
-	gl.ClearColor(0.97, 0.96, 0.93, 1.0)
-	gl.Clear(gl.COLOR_BUFFER_BIT)
+draw_score :: proc(l: ^win.Layer) {
+	staff_w: f32 = PAGE_WIDTH - MARGIN_X * 2.0
+	for i in 0 ..< 5 {
+		y := STAFF_Y + f32(i) * STAFF_SPACE
+		win.draw_rect(l, MARGIN_X, y, staff_w, LINE_THICK, {0.10, 0.10, 0.10, 1.0})
+	}
+	win.draw_rect(l, MARGIN_X, STAFF_Y, 1.2, STAFF_H, {0.10, 0.10, 0.10, 1.0})
+	win.draw_rect(l, MARGIN_X + staff_w - 1.2, STAFF_Y, 1.2, STAFF_H, {0.10, 0.10, 0.10, 1.0})
+}
 
-	sdl.GL_SwapWindow(window)
+draw_overlay :: proc(l: ^win.Layer) {
+	win.draw_rect(l, MARGIN_X, STAFF_Y - 4.0, 140.0, STAFF_H + 8.0, {0.20, 0.50, 0.95, 0.22})
+}
+
+draw_ui :: proc(l: ^win.Layer, win_w, win_h: f32) {
+	toolbar_h: f32 = 36.0
+	status_h: f32 = 24.0
+	win.draw_rect(l, 0, 0, win_w, toolbar_h, {0.14, 0.15, 0.17, 0.96})
+	win.draw_rect(l, 0, toolbar_h, win_w, 1.0, {0.08, 0.08, 0.10, 1.0})
+	win.draw_rect(l, 0, win_h - status_h, win_w, status_h, {0.14, 0.15, 0.17, 0.96})
 }

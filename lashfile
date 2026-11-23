@@ -15,3 +15,11 @@ run:
 clean:
     rm notation src.bin summary.txt
 
+crash:
+    lash debug
+    gdb ./notation
+
+leaks:
+    lash debug
+    lash run
+

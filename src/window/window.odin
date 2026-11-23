@@ -1,0 +1,274 @@
+package window
+
+import "core:fmt"
+import gl "vendor:OpenGL"
+import sdl "vendor:sdl2"
+
+Key :: enum {
+	Unknown,
+	Escape,
+	Num_0,
+}
+
+Mouse_Button :: enum {
+	Unknown,
+	Left,
+	Middle,
+	Right,
+}
+
+Event_Quit :: struct {}
+Event_Redraw :: struct {}
+
+Event_Key_Down :: struct {
+	key: Key,
+}
+
+Event_Mouse_Down :: struct {
+	button: Mouse_Button,
+	x, y:   i32,
+}
+
+Event_Mouse_Up :: struct {
+	button: Mouse_Button,
+	x, y:   i32,
+}
+
+Event_Mouse_Move :: struct {
+	x, y:   i32,
+	dx, dy: i32,
+}
+
+Event_Mouse_Wheel :: struct {
+	dy: i32,
+}
+
+Event :: union {
+	Event_Quit,
+	Event_Redraw,
+	Event_Key_Down,
+	Event_Mouse_Down,
+	Event_Mouse_Up,
+	Event_Mouse_Move,
+	Event_Mouse_Wheel,
+}
+
+Window :: struct {
+	handle:            ^sdl.Window,
+	gl_ctx:            sdl.GLContext,
+	renderer:          Renderer,
+	min_w, min_h:      i32,
+	win_w, win_h:      i32,
+	draw_w, draw_h:    i32,
+	unlocked_min_size: bool,
+	events:            [dynamic]Event,
+}
+
+create :: proc(title: cstring, target_w, target_h, min_w, min_h: i32) -> (w: Window, ok: bool) {
+	if sdl.Init({.VIDEO}) != 0 {
+		fmt.eprintfln("SDL_Init failed: %s", sdl.GetError())
+		return {}, false
+	}
+
+	sdl.GL_SetAttribute(.CONTEXT_MAJOR_VERSION, 3)
+	sdl.GL_SetAttribute(.CONTEXT_MINOR_VERSION, 3)
+	sdl.GL_SetAttribute(.CONTEXT_PROFILE_MASK, i32(sdl.GLprofile.CORE))
+	sdl.GL_SetAttribute(.CONTEXT_FLAGS, i32(sdl.GLcontextFlag.FORWARD_COMPATIBLE_FLAG))
+	sdl.GL_SetAttribute(.DOUBLEBUFFER, 1)
+	sdl.GL_SetAttribute(.MULTISAMPLEBUFFERS, 1)
+	sdl.GL_SetAttribute(.MULTISAMPLESAMPLES, 4)
+
+	init_w, init_h := compute_initial_size(target_w, target_h, min_w, min_h)
+
+	handle := sdl.CreateWindow(
+		title,
+		sdl.WINDOWPOS_CENTERED,
+		sdl.WINDOWPOS_CENTERED,
+		init_w,
+		init_h,
+		{.OPENGL, .RESIZABLE, .ALLOW_HIGHDPI, .HIDDEN},
+	)
+	if handle == nil {
+		fmt.eprintfln("CreateWindow failed: %s", sdl.GetError())
+		sdl.Quit()
+		return {}, false
+	}
+
+	gl_ctx := sdl.GL_CreateContext(handle)
+	if gl_ctx == nil {
+		fmt.eprintfln("GL_CreateContext failed: %s", sdl.GetError())
+		sdl.DestroyWindow(handle)
+		sdl.Quit()
+		return {}, false
+	}
+
+	sdl.GL_MakeCurrent(handle, gl_ctx)
+	sdl.GL_SetSwapInterval(1)
+
+	gl.load_up_to(3, 3, sdl.gl_set_proc_address)
+	gl.Enable(gl.MULTISAMPLE)
+
+	renderer, r_ok := renderer_init()
+	if !r_ok {
+		sdl.GL_DeleteContext(gl_ctx)
+		sdl.DestroyWindow(handle)
+		sdl.Quit()
+		return {}, false
+	}
+
+	// Lock min size before mapping so the WM centers the full portrait frame instead of clamping it.
+	sdl.SetWindowMinimumSize(handle, init_w, init_h)
+	sdl.ShowWindow(handle)
+
+	w.handle = handle
+	w.gl_ctx = gl_ctx
+	w.renderer = renderer
+	w.min_w = min_w
+	w.min_h = min_h
+	sdl.GetWindowSize(handle, &w.win_w, &w.win_h)
+	sdl.GL_GetDrawableSize(handle, &w.draw_w, &w.draw_h)
+
+	return w, true
+}
+
+destroy :: proc(w: ^Window) {
+	delete(w.events)
+	renderer_destroy(&w.renderer)
+	sdl.GL_DeleteContext(w.gl_ctx)
+	sdl.DestroyWindow(w.handle)
+	sdl.Quit()
+}
+
+add_layer :: proc(w: ^Window, space: Layer_Space) -> int {
+	append(&w.renderer.layers, Layer{space = space, visible = true})
+	return len(w.renderer.layers) - 1
+}
+
+layer :: proc(w: ^Window, index: int) -> ^Layer {
+	return &w.renderer.layers[index]
+}
+
+wait_events :: proc(w: ^Window) -> ([]Event, bool) {
+	clear(&w.events)
+
+	ev: sdl.Event
+	if !sdl.WaitEvent(&ev) {
+		return nil, false
+	}
+
+	for {
+		#partial switch ev.type {
+		case .QUIT:
+			append(&w.events, Event_Quit{})
+
+		case .KEYDOWN:
+			key := Key.Unknown
+			#partial switch ev.key.keysym.scancode {
+			case .ESCAPE: key = .Escape
+			case .NUM0:   key = .Num_0
+			}
+			append(&w.events, Event_Key_Down{key = key})
+
+		case .MOUSEBUTTONDOWN:
+			append(
+				&w.events,
+				Event_Mouse_Down{
+					button = translate_mouse_button(ev.button.button),
+					x      = ev.button.x,
+					y      = ev.button.y,
+				},
+			)
+
+		case .MOUSEBUTTONUP:
+			append(
+				&w.events,
+				Event_Mouse_Up{
+					button = translate_mouse_button(ev.button.button),
+					x      = ev.button.x,
+					y      = ev.button.y,
+				},
+			)
+
+		case .MOUSEMOTION:
+			append(
+				&w.events,
+				Event_Mouse_Move{
+					x  = ev.motion.x,
+					y  = ev.motion.y,
+					dx = ev.motion.xrel,
+					dy = ev.motion.yrel,
+				},
+			)
+
+		case .MOUSEWHEEL:
+			append(&w.events, Event_Mouse_Wheel{dy = ev.wheel.y})
+
+		case .WINDOWEVENT:
+			#partial switch ev.window.event {
+			case .EXPOSED, .FOCUS_GAINED:
+				if !w.unlocked_min_size {
+					sdl.SetWindowMinimumSize(w.handle, w.min_w, w.min_h)
+					w.unlocked_min_size = true
+				}
+				append(&w.events, Event_Redraw{})
+
+			case .SIZE_CHANGED:
+				w.win_w = ev.window.data1
+				w.win_h = ev.window.data2
+				sdl.GL_GetDrawableSize(w.handle, &w.draw_w, &w.draw_h)
+				fmt.printfln(
+					"Resized: %dx%d (drawable: %dx%d)",
+					w.win_w,
+					w.win_h,
+					w.draw_w,
+					w.draw_h,
+				)
+				append(&w.events, Event_Redraw{})
+			}
+		}
+
+		if !sdl.PollEvent(&ev) {
+			break
+		}
+	}
+
+	return w.events[:], true
+}
+
+begin_frame :: proc(w: ^Window, clear_color: [4]f32) {
+	sdl.GL_GetDrawableSize(w.handle, &w.draw_w, &w.draw_h)
+	sdl.GetWindowSize(w.handle, &w.win_w, &w.win_h)
+
+	gl.Viewport(0, 0, w.draw_w, w.draw_h)
+	gl.ClearColor(clear_color.r, clear_color.g, clear_color.b, clear_color.a)
+	gl.Clear(gl.COLOR_BUFFER_BIT)
+
+	renderer_begin_frame(&w.renderer)
+}
+
+end_frame :: proc(w: ^Window, cam: Camera) {
+	renderer_flush(&w.renderer, cam, f32(w.win_w), f32(w.win_h))
+	sdl.GL_SwapWindow(w.handle)
+}
+
+@(private = "file")
+translate_mouse_button :: proc(btn: u8) -> Mouse_Button {
+	switch btn {
+	case sdl.BUTTON_LEFT:   return .Left
+	case sdl.BUTTON_MIDDLE: return .Middle
+	case sdl.BUTTON_RIGHT:  return .Right
+	case:                   return .Unknown
+	}
+}
+
+@(private = "file")
+compute_initial_size :: proc(target_w, target_h, min_w, min_h: i32) -> (w, h: i32) {
+	usable: sdl.Rect
+	if sdl.GetDisplayUsableBounds(0, &usable) != 0 {
+		return target_w, target_h
+	}
+	max_h := max(i32(min_h), usable.h - 80)
+	max_w := max(i32(min_w), usable.w - 80)
+	scale := min(f32(1.0), f32(max_h) / f32(target_h), f32(max_w) / f32(target_w))
+	return i32(f32(target_w) * scale), i32(f32(target_h) * scale)
+}
