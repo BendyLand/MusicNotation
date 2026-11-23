@@ -19,6 +19,11 @@ STAFF_SPACE :: 6.0
 LINE_THICK :: 0.8
 STAFF_H :: 4.0 * STAFF_SPACE + LINE_THICK
 
+LAYER_PAGE :: 0
+LAYER_SCORE :: 1
+LAYER_OVERLAY :: 2
+LAYER_UI :: 3
+
 main :: proc() {
 	when ODIN_DEBUG {
 		track: mem.Tracking_Allocator
@@ -45,30 +50,20 @@ main :: proc() {
 		return
 	}
 	defer win.destroy(&w)
-	layers := win.Scene_Layers {
-		page    = win.add_layer(&w, .World),
-		score   = win.add_layer(&w, .World),
-		overlay = win.add_layer(&w, .World),
-		ui      = win.add_layer(&w, .Screen),
-	}
+	scene := win.scene_init(&w, .World, .World, .World, .Screen)
 	cam := win.Camera {
 		pos  = {PAGE_WIDTH * 0.5, PAGE_HEIGHT * 0.5},
 		zoom = 0.95,
 	}
-	draw_scene(&w, layers, cam)
+	draw_scene(&scene, cam)
 	panning := false
 	running := true
-	main_loop(&cam, &w, layers, &running, &panning)
+	main_loop(&cam, &scene, &running, &panning)
 }
 
-main_loop :: proc(
-	cam: ^win.Camera,
-	w: ^win.Window,
-	layers: win.Scene_Layers,
-	running, panning: ^bool,
-) {
+main_loop :: proc(cam: ^win.Camera, scene: ^win.Scene, running, panning: ^bool) {
 	for running^ {
-		events, wait_ok := win.wait_events(w)
+		events, wait_ok := win.wait_events(scene.window)
 		if !wait_ok {
 			break
 		}
@@ -111,18 +106,18 @@ main_loop :: proc(
 			}
 		}
 		if running^ && needs_redraw {
-			draw_scene(w, layers, cam^)
+			draw_scene(scene, cam^)
 		}
 	}
 }
 
-draw_scene :: proc(w: ^win.Window, layers: win.Scene_Layers, cam: win.Camera) {
-	win.begin_frame(w, {0.22, 0.23, 0.25, 1.0})
-	draw_page(win.layer(w, layers.page))
-	draw_score(win.layer(w, layers.score))
-	draw_overlay(win.layer(w, layers.overlay))
-	draw_ui(win.layer(w, layers.ui), f32(w.win_w), f32(w.win_h))
-	win.end_frame(w, cam)
+draw_scene :: proc(s: ^win.Scene, cam: win.Camera) {
+	win.scene_begin(s, {0.22, 0.23, 0.25, 1.0})
+	draw_page(win.scene_layer(s, LAYER_PAGE))
+	draw_score(win.scene_layer(s, LAYER_SCORE))
+	draw_overlay(win.scene_layer(s, LAYER_OVERLAY))
+	draw_ui(win.scene_layer(s, LAYER_UI), f32(s.window.win_w), f32(s.window.win_h))
+	win.scene_end(s, cam)
 }
 
 draw_page :: proc(l: ^win.Layer) {
@@ -151,3 +146,4 @@ draw_ui :: proc(l: ^win.Layer, win_w, win_h: f32) {
 	win.draw_rect(l, 0, toolbar_h, win_w, 1.0, {0.08, 0.08, 0.10, 1.0})
 	win.draw_rect(l, 0, win_h - status_h, win_w, status_h, {0.14, 0.15, 0.17, 0.96})
 }
+

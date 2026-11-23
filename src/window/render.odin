@@ -4,20 +4,7 @@ import "core:fmt"
 import "core:math/linalg"
 import gl "vendor:OpenGL"
 
-Layer_Space :: enum {
-	World,
-	Screen,
-}
-
-Vertex :: struct {
-	pos:   [2]f32,
-	color: [4]f32,
-}
-
-Camera :: struct {
-	pos:  [2]f32, // World coordinate at the center of the viewport (in points)
-	zoom: f32, // Pixels per world unit
-}
+MAX_LAYERS :: 32
 
 Layer :: struct {
 	space:   Layer_Space,
@@ -26,11 +13,12 @@ Layer :: struct {
 }
 
 Renderer :: struct {
-	program:  u32,
-	vao:      u32,
-	vbo:      u32,
-	proj_loc: i32,
-	layers:   [dynamic]Layer,
+	program:     u32,
+	vao:         u32,
+	vbo:         u32,
+	proj_loc:    i32,
+	layer_count: int,
+	layers:      [MAX_LAYERS]Layer,
 }
 
 @(private = "file")
@@ -83,17 +71,17 @@ renderer_init :: proc() -> (r: Renderer, ok: bool) {
 }
 
 renderer_destroy :: proc(r: ^Renderer) {
+	// Free every slot that was ever used, even if currently popped.
 	for &l in r.layers {
 		delete(l.verts)
 	}
-	delete(r.layers)
 	gl.DeleteBuffers(1, &r.vbo)
 	gl.DeleteVertexArrays(1, &r.vao)
 	gl.DeleteProgram(r.program)
 }
 
 renderer_begin_frame :: proc(r: ^Renderer) {
-	for &l in r.layers {
+	for &l in r.layers[:r.layer_count] {
 		clear(&l.verts)
 	}
 }
@@ -132,7 +120,7 @@ renderer_flush :: proc(r: ^Renderer, cam: Camera, win_w, win_h: f32) {
 	gl.UseProgram(r.program)
 	gl.BindVertexArray(r.vao)
 	gl.BindBuffer(gl.ARRAY_BUFFER, r.vbo)
-	for &l in r.layers {
+	for &l in r.layers[:r.layer_count] {
 		if !l.visible || len(l.verts) == 0 {
 			continue
 		}
@@ -149,3 +137,4 @@ renderer_flush :: proc(r: ^Renderer, cam: Camera, win_w, win_h: f32) {
 	gl.BindVertexArray(0)
 	gl.UseProgram(0)
 }
+
