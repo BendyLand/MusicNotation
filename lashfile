@@ -1,0 +1,17 @@
+build:
+    odin build src -out:notation
+
+debug:
+    odin build src -debug -out:notation
+
+run:
+    if [[ -f ./notation ]]; then
+        ./notation
+    else
+        echo "Binary not built. Running with odin cli tool..."
+        odin run src
+    fi
+
+clean:
+    rm notation src.bin summary.txt
+
