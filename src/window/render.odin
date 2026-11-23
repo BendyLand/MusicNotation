@@ -1,7 +1,6 @@
 package window
 
 import "core:fmt"
-import "core:math"
 import "core:math/linalg"
 import "core:mem"
 import "core:os"
@@ -46,14 +45,15 @@ void main() {
 			discard;
 		}
 		frag_color = vec4(v_color.rgb, v_color.a * alpha);
-	} else {
+	}
+	else {
 		frag_color = v_color;
 	}
 }
 `
 
 @(private = "file")
-DIGIT_GLYPHS := [11][5]u8{
+DIGIT_GLYPHS := [11][5]u8 {
 	{0b111, 0b101, 0b101, 0b101, 0b111}, // 0
 	{0b010, 0b110, 0b010, 0b010, 0b111}, // 1
 	{0b111, 0b001, 0b111, 0b100, 0b111}, // 2
@@ -185,7 +185,7 @@ atlas_create :: proc(path: string, codepoints: []rune) -> (atlas: Glyph_Atlas, o
 		adv_i, lsb_i: i32
 		stbtt.GetGlyphHMetrics(&font, glyph_idx, &adv_i, &lsb_i)
 
-		atlas.glyphs[cp] = Glyph_Metrics{
+		atlas.glyphs[cp] = Glyph_Metrics {
 			u0      = f32(pen_x) / f32(ATLAS_SIZE),
 			v0      = f32(pen_y) / f32(ATLAS_SIZE),
 			u1      = f32(pen_x + w) / f32(ATLAS_SIZE),
@@ -296,79 +296,6 @@ draw_rect :: proc(l: ^Layer, x, y, w, h: f32, color: [4]f32) {
 	)
 }
 
-draw_quad :: proc(l: ^Layer, p0, p1, p2, p3: [2]f32, color: [4]f32) {
-	append(
-		&l.verts,
-		Vertex{p0, {0, 0}, color, 0.0},
-		Vertex{p1, {0, 0}, color, 0.0},
-		Vertex{p2, {0, 0}, color, 0.0},
-		Vertex{p0, {0, 0}, color, 0.0},
-		Vertex{p2, {0, 0}, color, 0.0},
-		Vertex{p3, {0, 0}, color, 0.0},
-	)
-}
-
-draw_ellipse :: proc(
-	l: ^Layer,
-	cx, cy, rx, ry, angle_rad: f32,
-	color: [4]f32,
-	segments := 20,
-) {
-	cos_a := math.cos(angle_rad)
-	sin_a := math.sin(angle_rad)
-	center := [2]f32{cx, cy}
-	step := f32(math.TAU) / f32(segments)
-
-	prev := ellipse_point(cx, cy, rx, ry, cos_a, sin_a, 0)
-	for i in 1 ..= segments {
-		theta := f32(i) * step
-		curr := ellipse_point(cx, cy, rx, ry, cos_a, sin_a, theta)
-		append(
-			&l.verts,
-			Vertex{center, {0, 0}, color, 0.0},
-			Vertex{prev, {0, 0}, color, 0.0},
-			Vertex{curr, {0, 0}, color, 0.0},
-		)
-		prev = curr
-	}
-}
-
-draw_ring :: proc(
-	l: ^Layer,
-	cx, cy: f32,
-	outer_rx, outer_ry, outer_angle: f32,
-	inner_rx, inner_ry, inner_angle: f32,
-	color: [4]f32,
-	segments := 24,
-) {
-	oc := math.cos(outer_angle)
-	os := math.sin(outer_angle)
-	ic := math.cos(inner_angle)
-	is := math.sin(inner_angle)
-	step := f32(math.TAU) / f32(segments)
-
-	o_prev := ellipse_point(cx, cy, outer_rx, outer_ry, oc, os, 0)
-	i_prev := ellipse_point(cx, cy, inner_rx, inner_ry, ic, is, 0)
-	for i in 1 ..= segments {
-		theta := f32(i) * step
-		o_curr := ellipse_point(cx, cy, outer_rx, outer_ry, oc, os, theta)
-		i_curr := ellipse_point(cx, cy, inner_rx, inner_ry, ic, is, theta)
-		draw_quad(l, o_prev, o_curr, i_curr, i_prev, color)
-		o_prev = o_curr
-		i_prev = i_curr
-	}
-}
-
-@(private = "file")
-ellipse_point :: proc(cx, cy, rx, ry, cos_a, sin_a, theta: f32) -> [2]f32 {
-	lx := rx * math.cos(theta)
-	ly := ry * math.sin(theta)
-	return {
-		cx + lx * cos_a - ly * sin_a,
-		cy + lx * sin_a + ly * cos_a,
-	}
-}
-
 measure_int :: proc(value: int, pixel_size: f32) -> (w, h: f32) {
 	buf: [16]int
 	count := format_int_glyphs(value, &buf)
@@ -378,7 +305,6 @@ measure_int :: proc(value: int, pixel_size: f32) -> (w, h: f32) {
 draw_int :: proc(l: ^Layer, value: int, x, y, pixel_size: f32, color: [4]f32) {
 	buf: [16]int
 	count := format_int_glyphs(value, &buf)
-
 	cursor_x := x
 	for i in 0 ..< count {
 		glyph := DIGIT_GLYPHS[buf[i]]
@@ -430,9 +356,7 @@ renderer_flush :: proc(r: ^Renderer, cam: Camera, win_w, win_h: f32) {
 	if win_w <= 0 || win_h <= 0 {
 		return
 	}
-
 	screen_proj := linalg.matrix_ortho3d_f32(0, win_w, win_h, 0, -1, 1)
-
 	half_w := (win_w * 0.5) / cam.zoom
 	half_h := (win_h * 0.5) / cam.zoom
 	world_proj := linalg.matrix_ortho3d_f32(
@@ -443,25 +367,20 @@ renderer_flush :: proc(r: ^Renderer, cam: Camera, win_w, win_h: f32) {
 		-1,
 		1,
 	)
-
 	gl.UseProgram(r.program)
 	gl.Uniform1i(r.atlas_loc, 0)
 	gl.BindVertexArray(r.vao)
 	gl.BindBuffer(gl.ARRAY_BUFFER, r.vbo)
-
 	for &l in r.layers[:r.layer_count] {
 		if !l.visible || len(l.verts) == 0 {
 			continue
 		}
-
 		if l.atlas_tex != 0 {
 			gl.ActiveTexture(gl.TEXTURE0)
 			gl.BindTexture(gl.TEXTURE_2D, l.atlas_tex)
 		}
-
 		proj := l.space == .Screen ? screen_proj : world_proj
 		gl.UniformMatrix4fv(r.proj_loc, 1, gl.FALSE, &proj[0, 0])
-
 		gl.BufferData(
 			gl.ARRAY_BUFFER,
 			len(l.verts) * size_of(Vertex),

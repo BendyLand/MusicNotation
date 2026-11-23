@@ -8,6 +8,87 @@ import "core:strings"
 
 FORMAT_VERSION :: 1
 
+SCORE_PATH :: "demo.toml"
+FONT_PATH :: "Bravura.otf"
+
+LAYER_PAGE :: 0
+LAYER_SCORE :: 1
+LAYER_OVERLAY :: 2
+LAYER_UI :: 3
+
+// SMuFL codepoints (Bravura)
+SMUFL_G_CLEF :: rune(0xE050)
+SMUFL_C_CLEF :: rune(0xE05C)
+SMUFL_F_CLEF :: rune(0xE062)
+SMUFL_TIME_SIG_0 :: rune(0xE080)
+SMUFL_NOTEHEAD_WHOLE :: rune(0xE0A2)
+SMUFL_NOTEHEAD_HALF :: rune(0xE0A3)
+SMUFL_NOTEHEAD_BLACK :: rune(0xE0A4)
+SMUFL_AUGMENTATION_DOT :: rune(0xE1E7)
+SMUFL_FLAG_8TH_UP :: rune(0xE240)
+SMUFL_FLAG_8TH_DOWN :: rune(0xE241)
+SMUFL_FLAG_16TH_UP :: rune(0xE242)
+SMUFL_FLAG_16TH_DOWN :: rune(0xE243)
+SMUFL_FLAG_32ND_UP :: rune(0xE244)
+SMUFL_FLAG_32ND_DOWN :: rune(0xE245)
+SMUFL_ACCIDENTAL_FLAT :: rune(0xE260)
+SMUFL_ACCIDENTAL_NATURAL :: rune(0xE261)
+SMUFL_ACCIDENTAL_SHARP :: rune(0xE262)
+SMUFL_ACCIDENTAL_DOUBLE_SHARP :: rune(0xE263)
+SMUFL_ACCIDENTAL_DOUBLE_FLAT :: rune(0xE264)
+SMUFL_REST_WHOLE :: rune(0xE4E3)
+SMUFL_REST_HALF :: rune(0xE4E4)
+SMUFL_REST_QUARTER :: rune(0xE4E5)
+SMUFL_REST_8TH :: rune(0xE4E6)
+SMUFL_REST_16TH :: rune(0xE4E7)
+SMUFL_REST_32ND :: rune(0xE4E8)
+
+SMUFL_GLYPHS := [?]rune {
+	SMUFL_G_CLEF,
+	SMUFL_C_CLEF,
+	SMUFL_F_CLEF,
+	SMUFL_TIME_SIG_0 + 0,
+	SMUFL_TIME_SIG_0 + 1,
+	SMUFL_TIME_SIG_0 + 2,
+	SMUFL_TIME_SIG_0 + 3,
+	SMUFL_TIME_SIG_0 + 4,
+	SMUFL_TIME_SIG_0 + 5,
+	SMUFL_TIME_SIG_0 + 6,
+	SMUFL_TIME_SIG_0 + 7,
+	SMUFL_TIME_SIG_0 + 8,
+	SMUFL_TIME_SIG_0 + 9,
+	SMUFL_NOTEHEAD_WHOLE,
+	SMUFL_NOTEHEAD_HALF,
+	SMUFL_NOTEHEAD_BLACK,
+	SMUFL_AUGMENTATION_DOT,
+	SMUFL_FLAG_8TH_UP,
+	SMUFL_FLAG_8TH_DOWN,
+	SMUFL_FLAG_16TH_UP,
+	SMUFL_FLAG_16TH_DOWN,
+	SMUFL_FLAG_32ND_UP,
+	SMUFL_FLAG_32ND_DOWN,
+	SMUFL_ACCIDENTAL_FLAT,
+	SMUFL_ACCIDENTAL_NATURAL,
+	SMUFL_ACCIDENTAL_SHARP,
+	SMUFL_ACCIDENTAL_DOUBLE_SHARP,
+	SMUFL_ACCIDENTAL_DOUBLE_FLAT,
+	SMUFL_REST_WHOLE,
+	SMUFL_REST_HALF,
+	SMUFL_REST_QUARTER,
+	SMUFL_REST_8TH,
+	SMUFL_REST_16TH,
+	SMUFL_REST_32ND,
+}
+
+Note_Kind :: enum {
+	Whole,
+	Half,
+	Quarter,
+	Eighth,
+	Sixteenth,
+	Thirty_Second,
+}
+
 Rational :: struct {
 	num: i32,
 	den: i32,
@@ -30,17 +111,10 @@ Clef :: enum {
 	Tenor,
 }
 
-Accidental_Display :: enum {
-	Auto,
-	Force, // accidental gets preference
-	Nice, // other symbol gets preference
-}
-
 Pitch :: struct {
-	step:       Step,
-	octave:     i8,
-	alter:      i8, // -2 = bb, -1 = b, 0 = natural, 1 = #, 2 = x
-	accidental: Accidental_Display,
+	step:   Step,
+	octave: i8,
+	alter:  i8, // -2 = bb, -1 = b, 0 = natural, 1 = #, 2 = x
 }
 
 Note :: struct {
@@ -117,7 +191,7 @@ make_demo :: proc() -> Score {
 		page     = default_page_setup(),
 	}
 	for _ in 0 ..< 4 {
-		append(&s.measures, Measure_Meta{time_sig = {4, 4}, key_sig = 0})
+		append(&s.measures, Measure_Meta{time_sig = {4, 4}, key_sig = 1})
 	}
 	part := Part {
 		name = strings.clone("Piano"),
@@ -126,10 +200,10 @@ make_demo :: proc() -> Score {
 		clef = .Treble,
 	}
 	demo_bars := [4][4]Pitch {
-		{{.C, 4, 0, .Auto}, {.D, 4, 0, .Auto}, {.E, 4, 0, .Auto}, {.F, 4, 0, .Auto}},
-		{{.G, 4, 0, .Auto}, {.A, 4, 0, .Auto}, {.B, 4, 0, .Auto}, {.C, 5, 0, .Auto}},
-		{{.C, 5, 0, .Auto}, {.B, 4, 0, .Auto}, {.A, 4, 0, .Auto}, {.G, 4, 0, .Auto}},
-		{{.F, 4, 0, .Auto}, {.E, 4, 0, .Auto}, {.D, 4, 0, .Auto}, {.C, 4, 0, .Auto}},
+		{{.G, 4, 0}, {.A, 4, 0}, {.B, 4, 0}, {.C, 5, 0}},
+		{{.D, 5, 0}, {.E, 5, 0}, {.F, 5, 1}, {.G, 5, 0}},
+		{{.G, 5, 0}, {.F, 5, 1}, {.E, 5, 0}, {.D, 5, 0}},
+		{{.C, 5, 0}, {.B, 4, 0}, {.A, 4, 0}, {.G, 4, 0}},
 	}
 	for bar in demo_bars {
 		sm := Staff_Measure{}
@@ -372,10 +446,6 @@ destroy :: proc(s: ^Score) {
 	}
 	delete(s.parts)
 }
-
-// ---------------------------------------------------------------------------
-// Global Stream Helpers
-// ---------------------------------------------------------------------------
 
 @(private = "file")
 has_global_changes :: proc(measures: []Measure_Meta) -> bool {
@@ -632,13 +702,6 @@ write_note :: proc(b: ^strings.Builder, n: Note) {
 		strings.write_string(b, "##")
 	}
 	fmt.sbprintf(b, "%d", n.pitch.octave)
-	switch n.pitch.accidental {
-	case .Auto:
-	case .Force:
-		strings.write_byte(b, '!')
-	case .Nice:
-		strings.write_byte(b, '?')
-	}
 	if n.tie_start {
 		strings.write_byte(b, '~')
 	}
@@ -675,7 +738,6 @@ parse_bar :: proc(bar_text: string, voice: ^Voice) {
 	}
 	tokens := strings.fields(bar_text)
 	defer delete(tokens)
-
 	last_dur := Rational{1, 4}
 	for tok in tokens {
 		body := tok
@@ -687,7 +749,6 @@ parse_bar :: proc(bar_text: string, voice: ^Voice) {
 				last_dur = parsed
 			}
 		}
-
 		entry := Entry {
 			duration = dur,
 		}
@@ -717,16 +778,6 @@ parse_note :: proc(tok: string) -> (n: Note, ok: bool) {
 		n.tie_start = true
 		s = s[:len(s) - 1]
 	}
-	if len(s) > 0 {
-		switch s[len(s) - 1] {
-		case '!':
-			n.pitch.accidental = .Force
-			s = s[:len(s) - 1]
-		case '?':
-			n.pitch.accidental = .Nice
-			s = s[:len(s) - 1]
-		}
-	}
 	if len(s) < 2 {
 		return {}, false
 	}
@@ -750,7 +801,6 @@ parse_note :: proc(tok: string) -> (n: Note, ok: bool) {
 		return {}, false
 	}
 	s = s[1:]
-
 	for len(s) > 0 {
 		if s[0] == '#' {
 			n.pitch.alter += 1
@@ -764,7 +814,6 @@ parse_note :: proc(tok: string) -> (n: Note, ok: bool) {
 			break
 		}
 	}
-
 	oct, oct_ok := strconv.parse_int(s)
 	if !oct_ok {
 		return {}, false

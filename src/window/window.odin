@@ -5,7 +5,7 @@ import gl "vendor:OpenGL"
 import sdl "vendor:sdl2"
 
 MAX_LAYERS :: 32
-ATLAS_SIZE  :: 1024
+ATLAS_SIZE :: 1024
 ATLAS_EM_PX :: f32(128.0)
 
 Layer_Space :: enum {
@@ -17,12 +17,12 @@ Vertex :: struct {
 	pos:   [2]f32,
 	uv:    [2]f32,
 	color: [4]f32,
-	mode:  f32, // 0.0 = solid geometry, 1.0 = SDF glyph
+	mode:  f32, // 0.0 = solid geometry, 1.0 = alpha glyph
 }
 
 Camera :: struct {
 	pos:  [2]f32, // World coordinate at the center of the viewport (in points)
-	zoom: f32,    // Pixels per world unit
+	zoom: f32, // Pixels per world unit
 }
 
 Glyph_Metrics :: struct {

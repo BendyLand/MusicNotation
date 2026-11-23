@@ -10,8 +10,8 @@ import "core:unicode/utf8"
 Table_Kind :: enum {
 	Implicit, // Intermediate table created by [a.b] or [[a.b]] (can be explicitly opened later)
 	Explicit, // Explicitly opened via [a] or [[a]] (cannot be re-opened)
-	Dotted,   // Intermediate table created by dotted key a.b = 1 (cannot be opened via [a])
-	Inline,   // Created via { ... } (completely immutable)
+	Dotted, // Intermediate table created by dotted key a.b = 1 (cannot be opened via [a])
+	Inline, // Created via { ... } (completely immutable)
 }
 
 Date_Time_Kind :: enum {
@@ -70,12 +70,19 @@ Parser :: struct {
 	has_err:   bool,
 }
 
-parse :: proc(input: string, allocator := context.allocator) -> (root: ^Table, err: Error, ok: bool) {
+parse :: proc(
+	input: string,
+	allocator := context.allocator,
+) -> (
+	root: ^Table,
+	err: Error,
+	ok: bool,
+) {
 	if !utf8.valid_string(input) {
 		return nil, Error{message = "Invalid UTF-8 input", line = 1, col = 1}, false
 	}
 
-	p := Parser{
+	p := Parser {
 		src       = input,
 		pos       = 0,
 		line      = 1,
@@ -134,7 +141,14 @@ parse :: proc(input: string, allocator := context.allocator) -> (root: ^Table, e
 	return root, {}, true
 }
 
-parse_file :: proc(path: string, allocator := context.allocator) -> (root: ^Table, err: Error, ok: bool) {
+parse_file :: proc(
+	path: string,
+	allocator := context.allocator,
+) -> (
+	root: ^Table,
+	err: Error,
+	ok: bool,
+) {
 	data, read_err := os.read_entire_file(path, allocator)
 	if read_err != nil {
 		return nil, Error{message = "Failed to read file", line = 0, col = 0}, false
@@ -225,7 +239,11 @@ advance :: proc(p: ^Parser) -> u8 {
 @(private = "file")
 fail :: proc(p: ^Parser, msg: string) -> bool {
 	if !p.has_err {
-		p.err = Error{message = msg, line = p.line, col = p.col}
+		p.err = Error {
+			message = msg,
+			line    = p.line,
+			col     = p.col,
+		}
 		p.has_err = true
 	}
 	return false
@@ -323,11 +341,13 @@ is_disallowed_control :: proc(ch: u8) -> bool {
 
 @(private = "file")
 is_bare_key_char :: proc(ch: u8) -> bool {
-	return (ch >= 'a' && ch <= 'z') ||
+	return(
+		(ch >= 'a' && ch <= 'z') ||
 		(ch >= 'A' && ch <= 'Z') ||
 		(ch >= '0' && ch <= '9') ||
 		ch == '_' ||
-		ch == '-'
+		ch == '-' \
+	)
 }
 
 @(private = "file")
@@ -643,7 +663,7 @@ parse_value :: proc(p: ^Parser) -> (Value, bool) {
 
 	case 't':
 		if strings.has_prefix(p.src[p.pos:], "true") && is_value_delim(peek_at(p, 4)) {
-			for _ in 0 ..< 4 { advance(p) }
+			for _ in 0 ..< 4 {advance(p)}
 			return true, true
 		}
 		fail(p, "Invalid value")
@@ -651,7 +671,7 @@ parse_value :: proc(p: ^Parser) -> (Value, bool) {
 
 	case 'f':
 		if strings.has_prefix(p.src[p.pos:], "false") && is_value_delim(peek_at(p, 5)) {
-			for _ in 0 ..< 5 { advance(p) }
+			for _ in 0 ..< 5 {advance(p)}
 			return false, true
 		}
 		fail(p, "Invalid value")
@@ -674,8 +694,17 @@ parse_value :: proc(p: ^Parser) -> (Value, bool) {
 
 @(private = "file")
 is_value_delim :: proc(ch: u8) -> bool {
-	return ch == 0 || ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' ||
-		ch == '#' || ch == ',' || ch == ']' || ch == '}'
+	return(
+		ch == 0 ||
+		ch == ' ' ||
+		ch == '\t' ||
+		ch == '\n' ||
+		ch == '\r' ||
+		ch == '#' ||
+		ch == ',' ||
+		ch == ']' ||
+		ch == '}' \
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -687,7 +716,7 @@ parse_basic_string :: proc(p: ^Parser) -> (string, bool) {
 	advance(p) // consume '"'
 	b := strings.builder_make(p.allocator)
 	success := false
-	defer if !success { strings.builder_destroy(&b) }
+	defer if !success {strings.builder_destroy(&b)}
 
 	for !eof(p) {
 		ch := peek(p)
@@ -725,7 +754,7 @@ parse_ml_basic_string :: proc(p: ^Parser) -> (string, bool) {
 
 	b := strings.builder_make(p.allocator)
 	success := false
-	defer if !success { strings.builder_destroy(&b) }
+	defer if !success {strings.builder_destroy(&b)}
 
 	for !eof(p) {
 		ch := peek(p)
@@ -810,16 +839,26 @@ parse_escape :: proc(p: ^Parser, b: ^strings.Builder) -> bool {
 	}
 	ch := advance(p)
 	switch ch {
-	case 'b':  strings.write_byte(b, '\b')
-	case 't':  strings.write_byte(b, '\t')
-	case 'n':  strings.write_byte(b, '\n')
-	case 'f':  strings.write_byte(b, '\f')
-	case 'r':  strings.write_byte(b, '\r')
-	case '"':  strings.write_byte(b, '"')
-	case '\\': strings.write_byte(b, '\\')
-	case 'u':  return parse_unicode_escape(p, b, 4)
-	case 'U':  return parse_unicode_escape(p, b, 8)
-	case:      return fail(p, "Invalid escape sequence")
+	case 'b':
+		strings.write_byte(b, '\b')
+	case 't':
+		strings.write_byte(b, '\t')
+	case 'n':
+		strings.write_byte(b, '\n')
+	case 'f':
+		strings.write_byte(b, '\f')
+	case 'r':
+		strings.write_byte(b, '\r')
+	case '"':
+		strings.write_byte(b, '"')
+	case '\\':
+		strings.write_byte(b, '\\')
+	case 'u':
+		return parse_unicode_escape(p, b, 4)
+	case 'U':
+		return parse_unicode_escape(p, b, 8)
+	case:
+		return fail(p, "Invalid escape sequence")
 	}
 	return true
 }
@@ -834,9 +873,12 @@ parse_unicode_escape :: proc(p: ^Parser, b: ^strings.Builder, digits: int) -> bo
 		c := advance(p)
 		d: u32
 		switch c {
-		case '0' ..= '9': d = u32(c - '0')
-		case 'a' ..= 'f': d = u32(c - 'a' + 10)
-		case 'A' ..= 'F': d = u32(c - 'A' + 10)
+		case '0' ..= '9':
+			d = u32(c - '0')
+		case 'a' ..= 'f':
+			d = u32(c - 'a' + 10)
+		case 'A' ..= 'F':
+			d = u32(c - 'A' + 10)
 		}
 		val = (val << 4) | d
 	}
@@ -879,7 +921,7 @@ parse_ml_literal_string :: proc(p: ^Parser) -> (string, bool) {
 
 	b := strings.builder_make(p.allocator)
 	success := false
-	defer if !success { strings.builder_destroy(&b) }
+	defer if !success {strings.builder_destroy(&b)}
 
 	for !eof(p) {
 		ch := peek(p)
@@ -939,7 +981,7 @@ parse_array :: proc(p: ^Parser) -> (^Array, bool) {
 	arr := new(Array, p.allocator)
 	arr.items = make([dynamic]Value, p.allocator)
 	success := false
-	defer if !success { destroy_array(arr, p.allocator) }
+	defer if !success {destroy_array(arr, p.allocator)}
 
 	for {
 		if !skip_ws_and_newlines(p) {
@@ -985,7 +1027,7 @@ parse_inline_table :: proc(p: ^Parser) -> (^Table, bool) {
 	tbl.entries = make(map[string]Value, allocator = p.allocator)
 	tbl.kind = .Explicit
 	success := false
-	defer if !success { destroy(tbl, p.allocator) }
+	defer if !success {destroy(tbl, p.allocator)}
 
 	skip_ws(p)
 	if peek(p) == '}' {
@@ -1043,19 +1085,26 @@ parse_number :: proc(p: ^Parser) -> (Value, bool) {
 
 	// Special floats
 	switch raw {
-	case "inf", "+inf":  return math.inf_f64(1), true
-	case "-inf":         return math.inf_f64(-1), true
-	case "nan", "+nan":  return math.nan_f64(), true
-	case "-nan":         return -math.nan_f64(), true
+	case "inf", "+inf":
+		return math.inf_f64(1), true
+	case "-inf":
+		return math.inf_f64(-1), true
+	case "nan", "+nan":
+		return math.nan_f64(), true
+	case "-nan":
+		return -math.nan_f64(), true
 	}
 
 	// Prefixed integers: 0x, 0o, 0b (no sign allowed)
 	if len(raw) >= 2 && raw[0] == '0' && (raw[1] == 'x' || raw[1] == 'o' || raw[1] == 'b') {
 		base: int
 		switch raw[1] {
-		case 'x': base = 16
-		case 'o': base = 8
-		case 'b': base = 2
+		case 'x':
+			base = 16
+		case 'o':
+			base = 8
+		case 'b':
+			base = 2
 		}
 		digits := raw[2:]
 		clean, ok := clean_digits(digits, base)
@@ -1131,10 +1180,14 @@ clean_digits :: proc(s: string, base: int) -> (string, bool) {
 		prev_under = false
 		valid := false
 		switch base {
-		case 2:  valid = ch == '0' || ch == '1'
-		case 8:  valid = ch >= '0' && ch <= '7'
-		case 10: valid = is_digit(ch)
-		case 16: valid = is_hex_digit(ch)
+		case 2:
+			valid = ch == '0' || ch == '1'
+		case 8:
+			valid = ch >= '0' && ch <= '7'
+		case 10:
+			valid = is_digit(ch)
+		case 16:
+			valid = is_hex_digit(ch)
 		}
 		if !valid {
 			strings.builder_destroy(&b)
@@ -1177,7 +1230,7 @@ validate_and_clean_float :: proc(raw: string) -> (string, bool) {
 	s := raw
 	b := strings.builder_make()
 	success := false
-	defer if !success { strings.builder_destroy(&b) }
+	defer if !success {strings.builder_destroy(&b)}
 
 	if s[0] == '+' || s[0] == '-' {
 		if s[0] == '-' {
@@ -1260,18 +1313,18 @@ validate_and_clean_float :: proc(raw: string) -> (string, bool) {
 
 @(private = "file")
 looks_like_date :: proc(p: ^Parser) -> bool {
-	return is_digit(peek_at(p, 0)) &&
+	return(
+		is_digit(peek_at(p, 0)) &&
 		is_digit(peek_at(p, 1)) &&
 		is_digit(peek_at(p, 2)) &&
 		is_digit(peek_at(p, 3)) &&
-		peek_at(p, 4) == '-'
+		peek_at(p, 4) == '-' \
+	)
 }
 
 @(private = "file")
 looks_like_time :: proc(p: ^Parser) -> bool {
-	return is_digit(peek_at(p, 0)) &&
-		is_digit(peek_at(p, 1)) &&
-		peek_at(p, 2) == ':'
+	return is_digit(peek_at(p, 0)) && is_digit(peek_at(p, 1)) && peek_at(p, 2) == ':'
 }
 
 @(private = "file")
@@ -1329,7 +1382,10 @@ parse_datetime :: proc(p: ^Parser) -> (dt: Date_Time, ok: bool) {
 	if sep == 'T' || sep == 't' {
 		advance(p)
 		has_time = true
-	} else if sep == ' ' && is_digit(peek_at(p, 1)) && is_digit(peek_at(p, 2)) && peek_at(p, 3) == ':' {
+	} else if sep == ' ' &&
+	   is_digit(peek_at(p, 1)) &&
+	   is_digit(peek_at(p, 2)) &&
+	   peek_at(p, 3) == ':' {
 		advance(p)
 		has_time = true
 	}
