@@ -1,12 +1,46 @@
 package window
 
 import "core:fmt"
+import "../score"
 import gl "vendor:OpenGL"
 import sdl "vendor:sdl2"
 
 MAX_LAYERS :: 32
 ATLAS_SIZE :: 1024
 ATLAS_EM_PX :: f32(128.0)
+TOOLBAR_H :: f32(36.0)
+STATUS_H  :: f32(24.0)
+
+Bar_Accidental_State :: struct {
+	active: [11][score.Step]i8,
+}
+
+Drag_State :: struct {
+	panning:   bool,
+	left_down: bool,
+	press_pos: [2]i32,
+	cur_pos:   [2]i32,
+}
+
+Selection :: struct {
+	active:      bool,
+	part_idx:    int,
+	staff_idx:   int,
+	measure_idx: int,
+}
+
+Score_Layout :: struct {
+	staff_w:        f32,
+	space:          f32,
+	line_thick:     f32,
+	staff_h:        f32,
+	staff_step_y:   f32,
+	first_staff_y:  f32,
+	total_measures: int,
+	header_w:       f32,
+	music_x0:       f32,
+	measure_w:      f32,
+}
 
 Layer_Space :: enum {
 	World,
@@ -340,3 +374,61 @@ compute_initial_size :: proc(target_w, target_h, min_w, min_h: i32) -> (w, h: i3
 	scale := min(f32(1.0), f32(max_h) / f32(target_h), f32(max_w) / f32(target_w))
 	return i32(f32(target_w) * scale), i32(f32(target_h) * scale)
 }
+
+compute_score_layout :: proc(s: ^score.Score, atlas: ^Glyph_Atlas) -> Score_Layout {
+	page := s.page
+	staff_w := page.width_pt - page.margin_left - page.margin_right
+	space := page.staff_space_pt
+	line_thick: f32 = max(0.6, space * 0.12)
+	staff_h := 4.0 * space + line_thick
+	total_measures := max(1, score.measure_count(s))
+	header_w := staff_header_width(s, atlas)
+	music_x0 := page.margin_left + header_w
+	measure_w := max(space * 4.0, (staff_w - header_w) / f32(total_measures))
+	return Score_Layout {
+		staff_w = staff_w,
+		space = space,
+		line_thick = line_thick,
+		staff_h = staff_h,
+		staff_step_y = staff_h + space * 9.0,
+		first_staff_y = page.margin_top + 48.0,
+		total_measures = total_measures,
+		header_w = header_w,
+		music_x0 = music_x0,
+		measure_w = measure_w,
+	}
+}
+
+hit_test_measure :: proc(
+	s: ^score.Score,
+	atlas: ^Glyph_Atlas,
+	world_pos: [2]f32,
+) -> Selection {
+	layout := compute_score_layout(s, atlas)
+	if world_pos.x < layout.music_x0 {
+		return {}
+	}
+	m_idx := int((world_pos.x - layout.music_x0) / layout.measure_w)
+	if m_idx < 0 || m_idx >= layout.total_measures {
+		return {}
+	}
+	hit_pad_y := layout.space * 2.5
+	staff_y := layout.first_staff_y
+	for &part, p_idx in s.parts {
+		for &staff, s_idx in part.staves {
+			if m_idx < len(staff.measures) &&
+			   world_pos.y >= staff_y - hit_pad_y &&
+			   world_pos.y <= staff_y + layout.staff_h + hit_pad_y {
+				return Selection {
+					active = true,
+					part_idx = p_idx,
+					staff_idx = s_idx,
+					measure_idx = m_idx,
+				}
+			}
+			staff_y += layout.staff_step_y
+		}
+	}
+	return {}
+}
+

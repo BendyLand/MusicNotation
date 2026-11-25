@@ -1,17 +1,12 @@
 package window
 
 import "../score"
-import win "../window"
 import "core:fmt"
 import "core:math/linalg"
 import "core:mem"
 import "core:os"
 import gl "vendor:OpenGL"
 import stbtt "vendor:stb/truetype"
-
-Bar_Accidental_State :: struct {
-	active: [11][score.Step]i8,
-}
 
 @(private = "file")
 VERT_SRC :: `#version 330 core
@@ -399,23 +394,29 @@ renderer_flush :: proc(r: ^Renderer, cam: Camera, win_w, win_h: f32) {
 	gl.UseProgram(0)
 }
 
-draw_scene :: proc(scene: ^win.Scene, s: ^score.Score, atlas: ^win.Glyph_Atlas, cam: win.Camera) {
-	win.scene_begin(scene, {0.22, 0.23, 0.25, 1.0})
-	draw_page(win.scene_layer(scene, score.LAYER_PAGE), s.page)
-	draw_score(win.scene_layer(scene, score.LAYER_SCORE), s, atlas)
-	draw_overlay(win.scene_layer(scene, score.LAYER_OVERLAY), s, atlas)
+draw_scene :: proc(
+	scene: ^Scene,
+	s: ^score.Score,
+	atlas: ^Glyph_Atlas,
+	cam: Camera,
+	sel: Selection,
+) {
+	scene_begin(scene, {0.22, 0.23, 0.25, 1.0})
+	draw_page(scene_layer(scene, score.LAYER_PAGE), s.page)
+	draw_score(scene_layer(scene, score.LAYER_SCORE), s, atlas)
+	draw_overlay(scene_layer(scene, score.LAYER_OVERLAY), s, atlas, sel)
 	draw_ui(
-		win.scene_layer(scene, score.LAYER_UI),
+		scene_layer(scene, score.LAYER_UI),
 		f32(scene.window.win_w),
 		f32(scene.window.win_h),
 	)
 	pushed_inspector := false
-	if win.ctrl_held() {
-		mouse := win.mouse_pos()
-		hovered := win.scene_hit_test(scene, cam, mouse)
-		win.scene_push(scene, .Screen)
+	if ctrl_held() {
+		mouse := mouse_pos()
+		hovered := scene_hit_test(scene, cam, mouse)
+		scene_push(scene, .Screen)
 		draw_layer_badge(
-			win.scene_peek(scene),
+			scene_peek(scene),
 			hovered,
 			mouse,
 			f32(scene.window.win_w),
@@ -423,49 +424,73 @@ draw_scene :: proc(scene: ^win.Scene, s: ^score.Score, atlas: ^win.Glyph_Atlas, 
 		)
 		pushed_inspector = true
 	}
-	win.scene_end(scene, cam)
+	scene_end(scene, cam)
 	if pushed_inspector {
-		win.scene_pop(scene)
+		scene_pop(scene)
 	}
 }
 
-draw_layer_badge :: proc(l: ^win.Layer, layer_idx: int, mouse: [2]f32, win_w, win_h: f32) {
+draw_layer_badge :: proc(l: ^Layer, layer_idx: int, mouse: [2]f32, win_w, win_h: f32) {
 	pixel_size: f32 = 3.0
 	pad_x: f32 = 8.0
 	pad_y: f32 = 6.0
-	num_w, num_h := win.measure_int(layer_idx, pixel_size)
+	num_w, num_h := measure_int(layer_idx, pixel_size)
 	box_w := num_w + pad_x * 2.0
 	box_h := num_h + pad_y * 2.0
 	x := clamp(mouse.x + 14.0, 4.0, max(4.0, win_w - box_w - 4.0))
 	y := clamp(mouse.y + 14.0, 4.0, max(4.0, win_h - box_h - 4.0))
-	win.draw_rect(l, x - 1.0, y - 1.0, box_w + 2.0, box_h + 2.0, {0.35, 0.60, 1.0, 0.85})
-	win.draw_rect(l, x, y, box_w, box_h, {0.10, 0.11, 0.14, 0.94})
-	win.draw_int(l, layer_idx, x + pad_x, y + pad_y, pixel_size, {0.95, 0.96, 0.98, 1.0})
+	draw_rect(l, x - 1.0, y - 1.0, box_w + 2.0, box_h + 2.0, {0.35, 0.60, 1.0, 0.85})
+	draw_rect(l, x, y, box_w, box_h, {0.10, 0.11, 0.14, 0.94})
+	draw_int(l, layer_idx, x + pad_x, y + pad_y, pixel_size, {0.95, 0.96, 0.98, 1.0})
 }
 
-draw_page :: proc(l: ^win.Layer, page: score.Page_Setup) {
-	win.draw_rect(l, 6, 8, page.width_pt, page.height_pt, {0.0, 0.0, 0.0, 0.28})
-	win.draw_rect(l, 0, 0, page.width_pt, page.height_pt, {0.98, 0.97, 0.94, 1.0})
+draw_page :: proc(l: ^Layer, page: score.Page_Setup) {
+	draw_rect(l, 6, 8, page.width_pt, page.height_pt, {0.0, 0.0, 0.0, 0.28})
+	draw_rect(l, 0, 0, page.width_pt, page.height_pt, {0.98, 0.97, 0.94, 1.0})
 }
 
-draw_ui :: proc(l: ^win.Layer, win_w, win_h: f32) {
-	toolbar_h: f32 = 36.0
-	status_h: f32 = 24.0
-	win.draw_rect(l, 0, 0, win_w, toolbar_h, {0.14, 0.15, 0.17, 0.96})
-	win.draw_rect(l, 0, toolbar_h, win_w, 1.0, {0.08, 0.08, 0.10, 1.0})
-	win.draw_rect(l, 0, win_h - status_h, win_w, status_h, {0.14, 0.15, 0.17, 0.96})
+bar_accidentals_init :: proc(key_sig: i8) -> Bar_Accidental_State {
+	sharp_order := [7]score.Step{.F, .C, .G, .D, .A, .E, .B}
+	flat_order := [7]score.Step{.B, .E, .A, .D, .G, .C, .F}
+	key_alter: [score.Step]i8
+	if key_sig > 0 {
+		for i in 0 ..< min(int(key_sig), 7) {
+			key_alter[sharp_order[i]] = 1
+		}
+	}
+	else if key_sig < 0 {
+		for i in 0 ..< min(int(-key_sig), 7) {
+			key_alter[flat_order[i]] = -1
+		}
+	}
+	state: Bar_Accidental_State
+	for oct in 0 ..< len(state.active) {
+		state.active[oct] = key_alter
+	}
+	return state
 }
 
-staff_header_width :: proc(s: ^score.Score, atlas: ^win.Glyph_Atlas) -> f32 {
+should_draw_accidental :: proc(state: ^Bar_Accidental_State, note: score.Note) -> bool {
+	p := note.pitch
+	oct := clamp(int(p.octave), 0, len(state.active) - 1)
+	current := state.active[oct][p.step]
+	state.active[oct][p.step] = p.alter
+	if note.tie_end {
+		return false
+	}
+	return p.alter != current
+}
+
+staff_header_width :: proc(s: ^score.Score, atlas: ^Glyph_Atlas) -> f32 {
 	space := s.page.staff_space_pt
 	em_size := space * 4.0
-	fallback_w := space * 0.8 + win.glyph_advance(atlas, score.SMUFL_G_CLEF, em_size) + space * 0.9
+	fallback_w := space * 0.8 + glyph_advance(atlas, score.SMUFL_G_CLEF, em_size) + space * 0.9
 	max_w: f32 = 0.0
 	for &part in s.parts {
 		for &staff in part.staves {
 			w :=
 				space * 0.8 +
-				win.glyph_advance(atlas, clef_glyph(staff.clef), em_size) +
+				glyph_advance(atlas, clef_glyph(staff.clef), em_size) +
 				space * 0.9
 			if len(staff.measures) > 0 {
 				meta := staff.measures[0].meta
@@ -486,19 +511,20 @@ staff_header_width :: proc(s: ^score.Score, atlas: ^win.Glyph_Atlas) -> f32 {
 	return max_w > 0.0 ? max_w : fallback_w
 }
 
-draw_score :: proc(l: ^win.Layer, s: ^score.Score, atlas: ^win.Glyph_Atlas) {
+draw_score :: proc(l: ^Layer, s: ^score.Score, atlas: ^Glyph_Atlas) {
+	layout := compute_score_layout(s, atlas)
 	page := s.page
-	staff_w := page.width_pt - page.margin_left - page.margin_right
-	space := page.staff_space_pt
+	staff_w := layout.staff_w
+	space := layout.space
 	em_size := space * 4.0
-	line_thick: f32 = max(0.6, space * 0.12)
-	staff_h := 4.0 * space + line_thick
-	total_measures := max(1, score.measure_count(s))
-	header_w := staff_header_width(s, atlas)
-	music_x0 := page.margin_left + header_w
-	measure_w := max(space * 4.0, (staff_w - header_w) / f32(total_measures))
+	line_thick := layout.line_thick
+	staff_h := layout.staff_h
+	total_measures := layout.total_measures
+	music_x0 := layout.music_x0
+	measure_w := layout.measure_w
 	ink := [4]f32{0.08, 0.08, 0.08, 1.0}
-	staff_y := page.margin_top + 48.0
+	staff_y := layout.first_staff_y
+
 	for &part in s.parts {
 		for &staff in part.staves {
 			top_center_y := staff_y + line_thick * 0.5
@@ -520,7 +546,7 @@ draw_score :: proc(l: ^win.Layer, s: ^score.Score, atlas: ^win.Glyph_Atlas) {
 			// Opening clef, key signature, and time signature
 			cursor_x := page.margin_left + space * 0.8
 			draw_clef(l, atlas, staff.clef, cursor_x, top_center_y, space, em_size, ink)
-			cursor_x += win.glyph_advance(atlas, clef_glyph(staff.clef), em_size) + space * 0.9
+			cursor_x += glyph_advance(atlas, clef_glyph(staff.clef), em_size) + space * 0.9
 			if len(staff.measures) > 0 {
 				init_meta := staff.measures[0].meta
 				if init_meta.key_sig != 0 {
@@ -553,6 +579,7 @@ draw_score :: proc(l: ^win.Layer, s: ^score.Score, atlas: ^win.Glyph_Atlas) {
 				bar_x := music_x0 + f32(m_idx) * measure_w
 				sm := &staff.measures[m_idx]
 				bar_acc := bar_accidentals_init(sm.meta.key_sig)
+
 				notes_x0 := bar_x
 				if m_idx > 0 {
 					prev_meta := staff.measures[m_idx - 1].meta
@@ -576,7 +603,16 @@ draw_score :: proc(l: ^win.Layer, s: ^score.Score, atlas: ^win.Glyph_Atlas) {
 						}
 						if time_changed {
 							ts := sm.meta.time_sig
-							draw_time_sig(l, atlas, ts, sig_x, top_center_y, space, em_size, ink)
+							draw_time_sig(
+								l,
+								atlas,
+								ts,
+								sig_x,
+								top_center_y,
+								space,
+								em_size,
+								ink,
+							)
 							ts_w := max(
 								measure_time_num(atlas, ts.num, em_size),
 								measure_time_num(atlas, ts.den, em_size),
@@ -586,6 +622,7 @@ draw_score :: proc(l: ^win.Layer, s: ^score.Score, atlas: ^win.Glyph_Atlas) {
 						notes_x0 = sig_x
 					}
 				}
+
 				usable_w := max(space * 2.0, (bar_x + measure_w) - notes_x0)
 				for &voice in sm.voices {
 					if len(voice.entries) == 0 {
@@ -610,42 +647,9 @@ draw_score :: proc(l: ^win.Layer, s: ^score.Score, atlas: ^win.Glyph_Atlas) {
 					}
 				}
 			}
-			staff_y += staff_h + space * 9.0
+			staff_y += layout.staff_step_y
 		}
 	}
-}
-
-bar_accidentals_init :: proc(key_sig: i8) -> Bar_Accidental_State {
-	sharp_order := [7]score.Step{.F, .C, .G, .D, .A, .E, .B}
-	flat_order := [7]score.Step{.B, .E, .A, .D, .G, .C, .F}
-	key_alter: [score.Step]i8
-	if key_sig > 0 {
-		for i in 0 ..< min(int(key_sig), 7) {
-			key_alter[sharp_order[i]] = 1
-		}
-	}
-	else if key_sig < 0 {
-		for i in 0 ..< min(int(-key_sig), 7) {
-			key_alter[flat_order[i]] = -1
-		}
-	}
-	state: Bar_Accidental_State
-	for oct in 0 ..< len(state.active) {
-		state.active[oct] = key_alter
-	}
-	return state
-}
-
-should_draw_accidental :: proc(state: ^Bar_Accidental_State, note: score.Note) -> bool {
-	p := note.pitch
-	oct := clamp(int(p.octave), 0, len(state.active) - 1)
-	current := state.active[oct][p.step]
-	state.active[oct][p.step] = p.alter
-
-	if note.tie_end {
-		return false
-	}
-	return p.alter != current
 }
 
 clef_glyph :: proc(clef: score.Clef) -> rune {
@@ -663,8 +667,8 @@ clef_glyph :: proc(clef: score.Clef) -> rune {
 }
 
 draw_clef :: proc(
-	l: ^win.Layer,
-	atlas: ^win.Glyph_Atlas,
+	l: ^Layer,
+	atlas: ^Glyph_Atlas,
 	clef: score.Clef,
 	x, top_center_y, space, em_size: f32,
 	color: [4]f32,
@@ -680,12 +684,12 @@ draw_clef :: proc(
 	case .Tenor:
 		y += 1.0 * space // 2nd line from top
 	}
-	win.draw_glyph(l, atlas, clef_glyph(clef), x, y, em_size, color)
+	draw_glyph(l, atlas, clef_glyph(clef), x, y, em_size, color)
 }
 
 draw_key_sig :: proc(
-	l: ^win.Layer,
-	atlas: ^win.Glyph_Atlas,
+	l: ^Layer,
+	atlas: ^Glyph_Atlas,
 	clef: score.Clef,
 	fifths: i8,
 	start_x, top_center_y, space, em_size: f32,
@@ -709,29 +713,29 @@ draw_key_sig :: proc(
 	steps := fifths > 0 ? sharp_steps[clef] : flat_steps[clef]
 	for i in 0 ..< count {
 		y := top_center_y + f32(steps[i]) * (space * 0.5)
-		win.draw_glyph(l, atlas, cp, x, y, em_size, color)
+		draw_glyph(l, atlas, cp, x, y, em_size, color)
 		x += space * 1.05
 	}
 	return x
 }
 
-measure_time_num :: proc(atlas: ^win.Glyph_Atlas, n: i32, em_size: f32) -> f32 {
+measure_time_num :: proc(atlas: ^Glyph_Atlas, n: i32, em_size: f32) -> f32 {
 	if n <= 0 {
-		return win.glyph_advance(atlas, score.SMUFL_TIME_SIG_0, em_size)
+		return glyph_advance(atlas, score.SMUFL_TIME_SIG_0, em_size)
 	}
 	w: f32 = 0
 	v := n
 	for v > 0 {
 		d := v % 10
-		w += win.glyph_advance(atlas, score.SMUFL_TIME_SIG_0 + rune(d), em_size)
+		w += glyph_advance(atlas, score.SMUFL_TIME_SIG_0 + rune(d), em_size)
 		v /= 10
 	}
 	return w
 }
 
 draw_time_num :: proc(
-	l: ^win.Layer,
-	atlas: ^win.Glyph_Atlas,
+	l: ^Layer,
+	atlas: ^Glyph_Atlas,
 	n: i32,
 	cx, cy, em_size: f32,
 	color: [4]f32,
@@ -754,14 +758,14 @@ draw_time_num :: proc(
 	x := cx - total_w * 0.5
 	for i := count - 1; i >= 0; i -= 1 {
 		cp := score.SMUFL_TIME_SIG_0 + rune(digits[i])
-		win.draw_glyph(l, atlas, cp, x, cy, em_size, color)
-		x += win.glyph_advance(atlas, cp, em_size)
+		draw_glyph(l, atlas, cp, x, cy, em_size, color)
+		x += glyph_advance(atlas, cp, em_size)
 	}
 }
 
 draw_time_sig :: proc(
-	l: ^win.Layer,
-	atlas: ^win.Glyph_Atlas,
+	l: ^Layer,
+	atlas: ^Glyph_Atlas,
 	ts: score.Rational,
 	x, top_center_y, space, em_size: f32,
 	color: [4]f32,
@@ -774,8 +778,8 @@ draw_time_sig :: proc(
 }
 
 draw_entry :: proc(
-	l: ^win.Layer,
-	atlas: ^win.Glyph_Atlas,
+	l: ^Layer,
+	atlas: ^Glyph_Atlas,
 	entry: ^score.Entry,
 	clef: score.Clef,
 	bar_acc: ^Bar_Accidental_State,
@@ -798,7 +802,7 @@ draw_entry :: proc(
 	bot_dist := max_step - 4
 	stem_up := bot_dist > top_dist
 	head_cp := notehead_glyph(kind)
-	head_w := win.glyph_advance(atlas, head_cp, em_size)
+	head_w := glyph_advance(atlas, head_cp, em_size)
 	head_x := cx - head_w * 0.5
 	// Ledger lines above (<= -2) and below (>= 10)
 	ledger_w := head_w + space * 0.75
@@ -806,30 +810,30 @@ draw_entry :: proc(
 	if min_step <= -2 {
 		for st := -2; st >= min_step; st -= 2 {
 			ly := top_center_y + f32(st) * (space * 0.5) - ledger_thick * 0.5
-			win.draw_rect(l, cx - ledger_w * 0.5, ly, ledger_w, ledger_thick, color)
+			draw_rect(l, cx - ledger_w * 0.5, ly, ledger_w, ledger_thick, color)
 		}
 	}
 	if max_step >= 10 {
 		for st := 10; st <= max_step; st += 2 {
 			ly := top_center_y + f32(st) * (space * 0.5) - ledger_thick * 0.5
-			win.draw_rect(l, cx - ledger_w * 0.5, ly, ledger_w, ledger_thick, color)
+			draw_rect(l, cx - ledger_w * 0.5, ly, ledger_w, ledger_thick, color)
 		}
 	}
 	// Noteheads, accidentals, and augmentation dots
 	for note in entry.notes {
 		st := pitch_to_staff_step(note.pitch, clef)
 		cy := top_center_y + f32(st) * (space * 0.5)
-		win.draw_glyph(l, atlas, head_cp, head_x, cy, em_size, color)
+		draw_glyph(l, atlas, head_cp, head_x, cy, em_size, color)
 		if should_draw_accidental(bar_acc, note) {
 			acc_cp := accidental_glyph(note.pitch.alter)
-			acc_w := win.glyph_advance(atlas, acc_cp, em_size)
-			win.draw_glyph(l, atlas, acc_cp, head_x - acc_w - space * 0.25, cy, em_size, color)
+			acc_w := glyph_advance(atlas, acc_cp, em_size)
+			draw_glyph(l, atlas, acc_cp, head_x - acc_w - space * 0.25, cy, em_size, color)
 		}
 		if dots > 0 {
 			dot_y := (st % 2 == 0) ? cy - space * 0.5 : cy
 			for d in 0 ..< dots {
 				dot_x := head_x + head_w + space * (0.35 + f32(d) * 0.55)
-				win.draw_glyph(
+				draw_glyph(
 					l,
 					atlas,
 					score.SMUFL_AUGMENTATION_DOT,
@@ -860,10 +864,10 @@ draw_entry :: proc(
 			stem_top = high_y + space * 0.14
 			stem_bot = max(low_y + stem_len, mid_y)
 		}
-		win.draw_rect(l, stem_x, stem_top, stem_thick, stem_bot - stem_top, color)
+		draw_rect(l, stem_x, stem_top, stem_thick, stem_bot - stem_top, color)
 		if flag_cp, has_flag := flag_glyph(kind, stem_up); has_flag {
 			tip_y := stem_up ? stem_top : stem_bot
-			win.draw_glyph(l, atlas, flag_cp, stem_x, tip_y, em_size, color)
+			draw_glyph(l, atlas, flag_cp, stem_x, tip_y, em_size, color)
 		}
 	}
 }
@@ -908,8 +912,8 @@ accidental_glyph :: proc(alter: i8) -> rune {
 }
 
 draw_rest :: proc(
-	l: ^win.Layer,
-	atlas: ^win.Glyph_Atlas,
+	l: ^Layer,
+	atlas: ^Glyph_Atlas,
 	kind: score.Note_Kind,
 	dots: int,
 	cx, top_center_y, space, em_size: f32,
@@ -933,15 +937,15 @@ draw_rest :: proc(
 		cp = score.SMUFL_REST_32ND
 	}
 
-	rw := win.glyph_advance(atlas, cp, em_size)
+	rw := glyph_advance(atlas, cp, em_size)
 	rx := cx - rw * 0.5
-	win.draw_glyph(l, atlas, cp, rx, ry, em_size, color)
+	draw_glyph(l, atlas, cp, rx, ry, em_size, color)
 
 	if dots > 0 {
 		dot_y := top_center_y + 1.5 * space
 		for d in 0 ..< dots {
 			dot_x := rx + rw + space * (0.35 + f32(d) * 0.55)
-			win.draw_glyph(l, atlas, score.SMUFL_AUGMENTATION_DOT, dot_x, dot_y, em_size, color)
+			draw_glyph(l, atlas, score.SMUFL_AUGMENTATION_DOT, dot_x, dot_y, em_size, color)
 		}
 	}
 }
@@ -1014,22 +1018,48 @@ pitch_to_staff_step :: proc(p: score.Pitch, clef: score.Clef) -> int {
 	return top_line_diatonic - note_diatonic
 }
 
-draw_overlay :: proc(l: ^win.Layer, s: ^score.Score, atlas: ^win.Glyph_Atlas) {
-	page := s.page
-	staff_w := page.width_pt - page.margin_left - page.margin_right
-	header_w := staff_header_width(s, atlas)
-	measure_w := max(
-		page.staff_space_pt * 4.0,
-		(staff_w - header_w) / f32(max(1, score.measure_count(s))),
-	)
-	staff_y := page.margin_top + 48.0
-	staff_h := 4.0 * page.staff_space_pt + max(0.6, page.staff_space_pt * 0.12)
-	win.draw_rect(
+draw_overlay :: proc(
+	l: ^Layer,
+	s: ^score.Score,
+	atlas: ^Glyph_Atlas,
+	sel: Selection,
+) {
+	if !sel.active {
+		return
+	}
+	if sel.part_idx < 0 || sel.part_idx >= len(s.parts) {
+		return
+	}
+	part := &s.parts[sel.part_idx]
+	if sel.staff_idx < 0 || sel.staff_idx >= len(part.staves) {
+		return
+	}
+	if sel.measure_idx < 0 || sel.measure_idx >= len(part.staves[sel.staff_idx].measures) {
+		return
+	}
+
+	layout := compute_score_layout(s, atlas)
+	flat_staff_idx := 0
+	for p_i in 0 ..< sel.part_idx {
+		flat_staff_idx += len(s.parts[p_i].staves)
+	}
+	flat_staff_idx += sel.staff_idx
+
+	x := layout.music_x0 + f32(sel.measure_idx) * layout.measure_w
+	y := layout.first_staff_y + f32(flat_staff_idx) * layout.staff_step_y
+	draw_rect(
 		l,
-		page.margin_left + header_w,
-		staff_y - 4.0,
-		measure_w,
-		staff_h + 8.0,
+		x,
+		y - 4.0,
+		layout.measure_w,
+		layout.staff_h + 8.0,
 		{0.20, 0.50, 0.95, 0.22},
 	)
 }
+
+draw_ui :: proc(l: ^Layer, win_w, win_h: f32) {
+	draw_rect(l, 0, 0, win_w, TOOLBAR_H, {0.14, 0.15, 0.17, 0.96})
+	draw_rect(l, 0, TOOLBAR_H, win_w, 1.0, {0.08, 0.08, 0.10, 1.0})
+	draw_rect(l, 0, win_h - STATUS_H, win_w, STATUS_H, {0.14, 0.15, 0.17, 0.96})
+}
+

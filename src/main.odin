@@ -8,9 +8,10 @@ MIN_WIDTH     :: 320
 MIN_HEIGHT    :: 240
 TARGET_WIDTH  :: 800
 TARGET_HEIGHT :: 900
+TOOLBAR_H     :: f32(36.0)
+STATUS_H      :: f32(24.0)
 
 main :: proc() {
-	// setup
 	context.allocator = track_leaks_init()
 	defer track_leaks_finish()
 	s, loaded := score.load(score.SCORE_PATH)
@@ -22,21 +23,25 @@ main :: proc() {
 	}
 	defer score.destroy(&s)
 	w, ok := win.create("Notation", TARGET_WIDTH, TARGET_HEIGHT, MIN_WIDTH, MIN_HEIGHT)
-	if !ok do return 
+	if !ok {
+		return
+	}
 	defer win.destroy(&w)
 	atlas, font_ok := win.atlas_create(score.FONT_PATH, score.SMUFL_GLYPHS[:])
-	if !font_ok do return 
+	if !font_ok {
+		return
+	}
 	defer win.atlas_destroy(&atlas)
-	// start
 	scene := win.scene_init(&w, .World, .World, .World, .Screen)
 	cam := win.Camera {
 		pos  = {s.page.width_pt * 0.5, s.page.height_pt * 0.5},
 		zoom = 0.95,
 	}
-	win.draw_scene(&scene, &s, &atlas, cam)
-	panning := false
+	sel := win.Selection{}
+	drag := win.Drag_State{}
 	running := true
-	main_loop(&cam, &scene, &s, &atlas, &running, &panning)
+	win.draw_scene(&scene, &s, &atlas, cam, sel)
+	main_loop(&cam, &scene, &s, &atlas, &sel, &drag, &running)
 }
 
 main_loop :: proc(
@@ -44,7 +49,9 @@ main_loop :: proc(
 	scene: ^win.Scene,
 	s: ^score.Score,
 	atlas: ^win.Glyph_Atlas,
-	running, panning: ^bool,
+	sel: ^win.Selection,
+	drag: ^win.Drag_State,
+	running: ^bool,
 ) {
 	for running^ {
 		events, wait_ok := win.wait_events(scene.window)
@@ -61,28 +68,58 @@ main_loop :: proc(
 			case win.Event_Key_Down:
 				#partial switch e.key {
 				case .Escape:
-					running^ = false
+					if sel.active {
+						sel^ = {}
+						needs_redraw = true
+					}
+					else {
+						running^ = false
+					}
 				case .Num_0:
 					cam.pos = {s.page.width_pt * 0.5, s.page.height_pt * 0.5}
 					cam.zoom = 0.95
 					needs_redraw = true
 				}
 			case win.Event_Mouse_Down:
-				if e.button == .Left || e.button == .Middle {
-					panning^ = true
+				if e.button == .Right {
+					drag.panning = true
+				}
+				else if e.button == .Left {
+					win_w := f32(scene.window.win_w)
+					win_h := f32(scene.window.win_h)
+					my := f32(e.y)
+					if my > win.TOOLBAR_H && my < win_h - win.STATUS_H {
+						drag.left_down = true
+						drag.press_pos = {e.x, e.y}
+						drag.cur_pos = {e.x, e.y}
+						world := win.screen_to_world(cam^, win_w, win_h, {f32(e.x), my})
+						next_sel := win.hit_test_measure(s, atlas, world)
+						if next_sel != sel^ {
+							sel^ = next_sel
+							needs_redraw = true
+						}
+					}
 				}
 			case win.Event_Mouse_Up:
-				if e.button == .Left || e.button == .Middle {
-					panning^ = false
+				if e.button == .Right {
+					drag.panning = false
+				}
+				else if e.button == .Left {
+					drag.left_down = false
 				}
 			case win.Event_Mouse_Move:
-				if panning^ {
+				if drag.panning {
 					cam.pos.x -= f32(e.dx) / cam.zoom
 					cam.pos.y -= f32(e.dy) / cam.zoom
 					needs_redraw = true
 				}
-				else if win.ctrl_held() {
-					needs_redraw = true
+				else {
+					if drag.left_down {
+						drag.cur_pos = {e.x, e.y}
+					}
+					if win.ctrl_held() {
+						needs_redraw = true
+					}
 				}
 			case win.Event_Mouse_Wheel:
 				if e.dy != 0 {
@@ -93,8 +130,7 @@ main_loop :: proc(
 			}
 		}
 		if running^ && needs_redraw {
-			win.draw_scene(scene, s, atlas, cam^)
+			win.draw_scene(scene, s, atlas, cam^, sel^)
 		}
 	}
 }
-
