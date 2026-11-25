@@ -20,6 +20,7 @@ scene_push :: proc(s: ^utils.Scene, space: utils.Layer_Space) -> int {
 	// Mutate fields in place instead of overwriting the struct so any existing verts capacity is reused.
 	r.layers[idx].space = space
 	r.layers[idx].visible = true
+	r.layers[idx].pdf_cmds = nil
 	clear(&r.layers[idx].verts)
 	return idx
 }
@@ -71,7 +72,7 @@ scene_clear_layer :: proc(s: ^utils.Scene, index: int) {
 
 scene_hit_test :: proc(s: ^utils.Scene, cam: utils.Camera, screen_pos: [2]f32) -> int {
 	r := &s.window.renderer
-	world_pos := screen_to_world(cam, f32(s.window.win_w), f32(s.window.win_h), screen_pos)
+	world_pos := utils.screen_to_world(cam, f32(s.window.win_w), f32(s.window.win_h), screen_pos)
 
 	for i := r.layer_count - 1; i >= 0; i -= 1 {
 		l := &r.layers[i]
@@ -81,24 +82,11 @@ scene_hit_test :: proc(s: ^utils.Scene, cam: utils.Camera, screen_pos: [2]f32) -
 
 		pt := l.space == .Screen ? screen_pos : world_pos
 		for v := 0; v + 2 < len(l.verts); v += 3 {
-			if point_in_triangle(pt, l.verts[v].pos, l.verts[v + 1].pos, l.verts[v + 2].pos) {
+			if utils.point_in_triangle(pt, l.verts[v].pos, l.verts[v + 1].pos, l.verts[v + 2].pos) {
 				return i
 			}
 		}
 	}
 
 	return -1
-}
-
-@(private = "file")
-point_in_triangle :: proc(p, a, b, c: [2]f32) -> bool {
-	cross :: proc(o, u, v: [2]f32) -> f32 {
-		return (u.x - o.x) * (v.y - o.y) - (u.y - o.y) * (v.x - o.x)
-	}
-	d1 := cross(p, a, b)
-	d2 := cross(p, b, c)
-	d3 := cross(p, c, a)
-	has_neg := (d1 < 0) || (d2 < 0) || (d3 < 0)
-	has_pos := (d1 > 0) || (d2 > 0) || (d3 > 0)
-	return !(has_neg && has_pos)
 }

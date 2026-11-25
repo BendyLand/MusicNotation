@@ -1,18 +1,18 @@
 package main
 
-import "utils"
 import "score"
+import "utils"
 import win "window"
 
 main :: proc() {
 	context.allocator = track_leaks_init()
 	defer track_leaks_finish()
-	s, loaded := utils.load(utils.SCORE_PATH)
+	s, loaded := score.load(utils.SCORE_PATH)
 	if !loaded {
 		s = score.make_demo()
-		utils.save_score(&s)
+		score.save_score(&s)
 	}
-	defer utils.destroy(&s)
+	defer score.destroy(&s)
 	w, ok := win.create("Notation", utils.TARGET_WIDTH, utils.TARGET_HEIGHT, utils.MIN_WIDTH, utils.MIN_HEIGHT)
 	if !ok {
 		return
@@ -58,15 +58,18 @@ main_loop :: proc(
 		}
 		needs_redraw := false
 		for event in events {
-			#partial switch e in event {
+			switch e in event {
 			case utils.Event_Quit:
 				running^ = false
 			case utils.Event_Redraw:
 				needs_redraw = true
 			case utils.Event_Key_Down:
 				if e.ctrl {
-					if e.key == .S {
-						utils.save_score(s)
+					#partial switch e.key {
+					case .S:
+						score.save_score(s)
+					case .E, .P:
+						score.export_score_pdf(s, atlas)
 					}
 					continue
 				}
@@ -95,8 +98,8 @@ main_loop :: proc(
 				case .Backspace, .Delete:
 					if tool.mode == .Select && sel.active {
 						sm := &s.parts[sel.part_idx].staves[sel.staff_idx].measures[sel.measure_idx]
-						utils.clear_measure(sm)
-						utils.save_score(s)
+						score.clear_measure(sm)
+						score.save_score(s)
 						needs_redraw = true
 					}
 					else if tool.mode == .Note_Entry {
@@ -104,9 +107,9 @@ main_loop :: proc(
 						win_w := f32(scene.window.win_w)
 						win_h := f32(scene.window.win_h)
 						if mouse.y > utils.TOOLBAR_H && mouse.y < win_h - utils.STATUS_H {
-							world := win.screen_to_world(cam^, win_w, win_h, mouse)
-							if win.pop_entry_at_world(s, atlas, world) {
-								utils.save_score(s)
+							world := utils.screen_to_world(cam^, win_w, win_h, mouse)
+							if score.pop_entry_at_world(s, atlas, world) {
+								score.save_score(s)
 								needs_redraw = true
 							}
 						}
@@ -179,28 +182,32 @@ main_loop :: proc(
 					mx := f32(e.x)
 					my := f32(e.y)
 					if my <= utils.TOOLBAR_H {
-						if win.toolbar_click(tool, mx, my) {
+						switch win.toolbar_click(tool, mx, my) {
+						case .None:
+						case .Tool_Changed:
 							if tool.mode == .Note_Entry {
 								sel^ = {}
 							}
 							needs_redraw = true
+						case .Export_Pdf:
+							score.export_score_pdf(s, atlas)
 						}
 					}
 					else if my < win_h - utils.STATUS_H {
-						world := win.screen_to_world(cam^, win_w, win_h, {mx, my})
+						world := utils.screen_to_world(cam^, win_w, win_h, {mx, my})
 						if tool.mode == .Select {
 							drag.left_down = true
 							drag.press_pos = {e.x, e.y}
 							drag.cur_pos = {e.x, e.y}
-							next_sel := win.hit_test_measure(s, atlas, world)
+							next_sel := utils.hit_test_measure(s, atlas, world)
 							if next_sel != sel^ {
 								sel^ = next_sel
 								needs_redraw = true
 							}
 						}
 						else if tool.mode == .Note_Entry {
-							if win.apply_note_click(s, atlas, tool^, world) {
-								utils.save_score(s)
+							if score.apply_note_click(s, atlas, tool^, world) {
+								score.save_score(s)
 								needs_redraw = true
 							}
 						}
@@ -236,16 +243,14 @@ main_loop :: proc(
 				}
 			}
 		}
-
 		mouse := win.mouse_pos()
 		win_h := f32(scene.window.win_h)
 		in_canvas := mouse.y > utils.TOOLBAR_H && mouse.y < win_h - utils.STATUS_H
-		hide_os_cursor :=
-			tool.mode == .Note_Entry && in_canvas && !drag.panning && !win.ctrl_held()
+		hide_os_cursor := tool.mode == .Note_Entry && in_canvas && !drag.panning && !win.ctrl_held()
 		win.set_cursor_visible(!hide_os_cursor)
-
 		if running^ && needs_redraw {
 			win.draw_scene(scene, s, atlas, cam^, sel^, tool^, drag.panning)
 		}
 	}
 }
+

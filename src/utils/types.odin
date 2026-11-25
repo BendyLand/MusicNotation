@@ -15,8 +15,18 @@ ATLAS_EM_PX :: f32(128.0)
 TOOLBAR_H   :: f32(36.0)
 STATUS_H    :: f32(24.0)
 
+BTN_Y        :: f32(4.0)
+BTN_SIZE     :: f32(28.0)
+BTN_SELECT_X :: f32(8.0)
+BTN_NOTES_X0 :: f32(48.0)
+BTN_STEP_X   :: f32(32.0)
+BTN_REST_X   :: BTN_NOTES_X0 + 6.0 * BTN_STEP_X + 4.0
+BTN_ACC_X0   :: BTN_REST_X + BTN_SIZE + 12.0
+BTN_EXPORT_X :: BTN_ACC_X0 + 3.0 * BTN_STEP_X + 8.0
+
 SCORE_PATH :: "demo.toml"
 FONT_PATH  :: "Bravura.otf"
+PDF_PATH   :: "score.pdf"
 
 LAYER_PAGE    :: 0
 LAYER_SCORE   :: 1
@@ -85,6 +95,20 @@ SMUFL_GLYPHS := [?]rune {
 	SMUFL_REST_8TH,
 	SMUFL_REST_16TH,
 	SMUFL_REST_32ND,
+}
+
+DIGIT_GLYPHS := [11][5]u8 {
+	{0b111, 0b101, 0b101, 0b101, 0b111}, // 0
+	{0b010, 0b110, 0b010, 0b010, 0b111}, // 1
+	{0b111, 0b001, 0b111, 0b100, 0b111}, // 2
+	{0b111, 0b001, 0b111, 0b001, 0b111}, // 3
+	{0b101, 0b101, 0b111, 0b001, 0b001}, // 4
+	{0b111, 0b100, 0b111, 0b001, 0b111}, // 5
+	{0b111, 0b100, 0b111, 0b101, 0b111}, // 6
+	{0b111, 0b001, 0b001, 0b010, 0b010}, // 7
+	{0b111, 0b101, 0b111, 0b101, 0b111}, // 8
+	{0b111, 0b101, 0b111, 0b001, 0b111}, // 9
+	{0b000, 0b000, 0b111, 0b000, 0b000}, // -
 }
 
 Note_Kind :: enum {
@@ -208,6 +232,12 @@ Accidental_Override :: enum {
 	Sharp,
 }
 
+Toolbar_Action :: enum {
+	None,
+	Tool_Changed,
+	Export_Pdf,
+}
+
 Editor_Tool :: struct {
 	mode:       Edit_Mode,
 	duration:   Note_Kind,
@@ -274,8 +304,26 @@ Glyph_Metrics :: struct {
 }
 
 Glyph_Atlas :: struct {
-	tex:    u32,
-	glyphs: map[rune]Glyph_Metrics,
+	tex:        u32,
+	glyphs:     map[rune]Glyph_Metrics,
+	font_bytes: []u8,
+}
+
+Pdf_Rect :: struct {
+	x, y, w, h: f32,
+	color:      [4]f32,
+}
+
+Pdf_Glyph :: struct {
+	cp:                 rune,
+	origin_x, origin_y: f32,
+	em_size:            f32,
+	color:              [4]f32,
+}
+
+Pdf_Cmd :: union {
+	Pdf_Rect,
+	Pdf_Glyph,
 }
 
 Layer :: struct {
@@ -283,6 +331,7 @@ Layer :: struct {
 	visible:   bool,
 	atlas_tex: u32,
 	verts:     [dynamic]Vertex,
+	pdf_cmds:  ^[dynamic]Pdf_Cmd,
 }
 
 Renderer :: struct {
@@ -310,6 +359,8 @@ Key :: enum {
 	Num_6,
 	R,
 	S,
+	E,
+	P,
 	N,
 	Minus,
 	Equals,
@@ -373,5 +424,4 @@ Window :: struct {
 Scene :: struct {
 	window: ^Window,
 }
-
 

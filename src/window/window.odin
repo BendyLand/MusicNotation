@@ -1,18 +1,11 @@
 package window
 
+import "../utils"
 import "core:fmt"
 import gl "vendor:OpenGL"
 import sdl "vendor:sdl2"
 
-import "../utils"
-
-create :: proc(
-	title: cstring,
-	target_w, target_h, min_w, min_h: i32,
-) -> (
-	w: utils.Window,
-	ok: bool,
-) {
+create :: proc(title: cstring, target_w, target_h, min_w, min_h: i32) -> (w: utils.Window, ok: bool) {
 	if sdl.Init({.VIDEO}) != 0 {
 		fmt.eprintfln("SDL_Init failed: %s", sdl.GetError())
 		return {}, false
@@ -24,7 +17,7 @@ create :: proc(
 	sdl.GL_SetAttribute(.DOUBLEBUFFER, 1)
 	sdl.GL_SetAttribute(.MULTISAMPLEBUFFERS, 1)
 	sdl.GL_SetAttribute(.MULTISAMPLESAMPLES, 4)
-	init_w, init_h := compute_initial_size(target_w, target_h, min_w, min_h)
+	init_w, init_h := utils.compute_initial_size(target_w, target_h, min_w, min_h)
 	handle := sdl.CreateWindow(
 		title,
 		sdl.WINDOWPOS_CENTERED,
@@ -142,6 +135,10 @@ wait_events :: proc(w: ^utils.Window) -> ([]utils.Event, bool) {
 					key = .R
 				case .S:
 					key = .S
+				case .E:
+					key = .E
+				case .P:
+					key = .P
 				case .N:
 					key = .N
 				case .MINUS:
@@ -162,9 +159,9 @@ wait_events :: proc(w: ^utils.Window) -> ([]utils.Event, bool) {
 			append(
 				&w.events,
 				utils.Event_Mouse_Down {
-					button = translate_mouse_button(ev.button.button),
-					x = ev.button.x,
-					y = ev.button.y,
+					button = utils.translate_mouse_button(ev.button.button),
+					x      = ev.button.x,
+					y      = ev.button.y,
 				},
 			)
 
@@ -172,9 +169,9 @@ wait_events :: proc(w: ^utils.Window) -> ([]utils.Event, bool) {
 			append(
 				&w.events,
 				utils.Event_Mouse_Up {
-					button = translate_mouse_button(ev.button.button),
-					x = ev.button.x,
-					y = ev.button.y,
+					button = utils.translate_mouse_button(ev.button.button),
+					x      = ev.button.x,
+					y      = ev.button.y,
 				},
 			)
 
@@ -182,8 +179,8 @@ wait_events :: proc(w: ^utils.Window) -> ([]utils.Event, bool) {
 			append(
 				&w.events,
 				utils.Event_Mouse_Move {
-					x = ev.motion.x,
-					y = ev.motion.y,
+					x  = ev.motion.x,
+					y  = ev.motion.y,
 					dx = ev.motion.xrel,
 					dy = ev.motion.yrel,
 				},
@@ -224,6 +221,46 @@ wait_events :: proc(w: ^utils.Window) -> ([]utils.Event, bool) {
 	return w.events[:], true
 }
 
+toolbar_click :: proc(tool: ^utils.Editor_Tool, mx, my: f32) -> utils.Toolbar_Action {
+	if my < utils.BTN_Y || my > utils.BTN_Y + utils.BTN_SIZE {
+		return .None
+	}
+	if mx >= utils.BTN_SELECT_X && mx <= utils.BTN_SELECT_X + utils.BTN_SIZE {
+		tool.mode = .Select
+		return .Tool_Changed
+	}
+	for i in 0 ..< 6 {
+		bx := utils.BTN_NOTES_X0 + f32(i) * utils.BTN_STEP_X
+		if mx >= bx && mx <= bx + utils.BTN_SIZE {
+			tool.mode = .Note_Entry
+			tool.duration = utils.Note_Kind(i)
+			return .Tool_Changed
+		}
+	}
+	if mx >= utils.BTN_REST_X && mx <= utils.BTN_REST_X + utils.BTN_SIZE {
+		if tool.mode == .Select {
+			tool.mode = .Note_Entry
+			tool.is_rest = true
+		}
+		else {
+			tool.is_rest = !tool.is_rest
+		}
+		return .Tool_Changed
+	}
+	acc_modes := [3]utils.Accidental_Override{.Flat, .Natural, .Sharp}
+	for mode, i in acc_modes {
+		bx := utils.BTN_ACC_X0 + f32(i) * utils.BTN_STEP_X
+		if mx >= bx && mx <= bx + utils.BTN_SIZE {
+			utils.toggle_accidental(tool, mode)
+			return .Tool_Changed
+		}
+	}
+	if mx >= utils.BTN_EXPORT_X && mx <= utils.BTN_EXPORT_X + utils.BTN_SIZE {
+		return .Export_Pdf
+	}
+	return .None
+}
+
 begin_frame :: proc(w: ^utils.Window, clear_color: [4]f32) {
 	sdl.GL_GetDrawableSize(w.handle, &w.draw_w, &w.draw_h)
 	sdl.GetWindowSize(w.handle, &w.win_w, &w.win_h)
@@ -238,87 +275,4 @@ begin_frame :: proc(w: ^utils.Window, clear_color: [4]f32) {
 end_frame :: proc(w: ^utils.Window, cam: utils.Camera) {
 	renderer_flush(&w.renderer, cam, f32(w.win_w), f32(w.win_h))
 	sdl.GL_SwapWindow(w.handle)
-}
-
-@(private = "file")
-translate_mouse_button :: proc(btn: u8) -> utils.Mouse_Button {
-	switch btn {
-	case sdl.BUTTON_LEFT:
-		return .Left
-	case sdl.BUTTON_MIDDLE:
-		return .Middle
-	case sdl.BUTTON_RIGHT:
-		return .Right
-	case:
-		return .Unknown
-	}
-}
-
-@(private = "file")
-compute_initial_size :: proc(target_w, target_h, min_w, min_h: i32) -> (w, h: i32) {
-	usable: sdl.Rect
-	if sdl.GetDisplayUsableBounds(0, &usable) != 0 {
-		return target_w, target_h
-	}
-	max_h := max(i32(min_h), usable.h - 80)
-	max_w := max(i32(min_w), usable.w - 80)
-	scale := min(f32(1.0), f32(max_h) / f32(target_h), f32(max_w) / f32(target_w))
-	return i32(f32(target_w) * scale), i32(f32(target_h) * scale)
-}
-
-compute_score_layout :: proc(s: ^utils.Score, atlas: ^utils.Glyph_Atlas) -> utils.Score_Layout {
-	page := s.page
-	staff_w := page.width_pt - page.margin_left - page.margin_right
-	space := page.staff_space_pt
-	line_thick: f32 = max(0.6, space * 0.12)
-	staff_h := 4.0 * space + line_thick
-	total_measures := max(1, utils.measure_count(s))
-	header_w := staff_header_width(s, atlas)
-	music_x0 := page.margin_left + header_w
-	measure_w := max(space * 4.0, (staff_w - header_w) / f32(total_measures))
-	return utils.Score_Layout {
-		staff_w = staff_w,
-		space = space,
-		line_thick = line_thick,
-		staff_h = staff_h,
-		staff_step_y = staff_h + space * 9.0,
-		first_staff_y = page.margin_top + 48.0,
-		total_measures = total_measures,
-		header_w = header_w,
-		music_x0 = music_x0,
-		measure_w = measure_w,
-	}
-}
-
-hit_test_measure :: proc(
-	s: ^utils.Score,
-	atlas: ^utils.Glyph_Atlas,
-	world_pos: [2]f32,
-) -> utils.Selection {
-	layout := compute_score_layout(s, atlas)
-	if world_pos.x < layout.music_x0 {
-		return {}
-	}
-	m_idx := int((world_pos.x - layout.music_x0) / layout.measure_w)
-	if m_idx < 0 || m_idx >= layout.total_measures {
-		return {}
-	}
-	hit_pad_y := layout.space * 3.0
-	staff_y := layout.first_staff_y
-	for &part, p_idx in s.parts {
-		for &staff, s_idx in part.staves {
-			if m_idx < len(staff.measures) &&
-			   world_pos.y >= staff_y - hit_pad_y &&
-			   world_pos.y <= staff_y + layout.staff_h + hit_pad_y {
-				return utils.Selection {
-					active = true,
-					part_idx = p_idx,
-					staff_idx = s_idx,
-					measure_idx = m_idx,
-				}
-			}
-			staff_y += layout.staff_step_y
-		}
-	}
-	return {}
 }
