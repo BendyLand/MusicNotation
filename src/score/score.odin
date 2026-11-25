@@ -6,42 +6,42 @@ import "core:os"
 import "core:strconv"
 import "core:strings"
 
-FORMAT_VERSION :: 1
+FORMAT_VERSION :: 2
 
 SCORE_PATH :: "demo.toml"
-FONT_PATH :: "Bravura.otf"
+FONT_PATH  :: "Bravura.otf"
 
-LAYER_PAGE :: 0
-LAYER_SCORE :: 1
+LAYER_PAGE    :: 0
+LAYER_SCORE   :: 1
 LAYER_OVERLAY :: 2
-LAYER_UI :: 3
+LAYER_UI      :: 3
 
 // SMuFL codepoints (Bravura)
-SMUFL_G_CLEF :: rune(0xE050)
-SMUFL_C_CLEF :: rune(0xE05C)
-SMUFL_F_CLEF :: rune(0xE062)
-SMUFL_TIME_SIG_0 :: rune(0xE080)
-SMUFL_NOTEHEAD_WHOLE :: rune(0xE0A2)
-SMUFL_NOTEHEAD_HALF :: rune(0xE0A3)
-SMUFL_NOTEHEAD_BLACK :: rune(0xE0A4)
-SMUFL_AUGMENTATION_DOT :: rune(0xE1E7)
-SMUFL_FLAG_8TH_UP :: rune(0xE240)
-SMUFL_FLAG_8TH_DOWN :: rune(0xE241)
-SMUFL_FLAG_16TH_UP :: rune(0xE242)
-SMUFL_FLAG_16TH_DOWN :: rune(0xE243)
-SMUFL_FLAG_32ND_UP :: rune(0xE244)
-SMUFL_FLAG_32ND_DOWN :: rune(0xE245)
-SMUFL_ACCIDENTAL_FLAT :: rune(0xE260)
-SMUFL_ACCIDENTAL_NATURAL :: rune(0xE261)
-SMUFL_ACCIDENTAL_SHARP :: rune(0xE262)
+SMUFL_G_CLEF                  :: rune(0xE050)
+SMUFL_C_CLEF                  :: rune(0xE05C)
+SMUFL_F_CLEF                  :: rune(0xE062)
+SMUFL_TIME_SIG_0              :: rune(0xE080)
+SMUFL_NOTEHEAD_WHOLE          :: rune(0xE0A2)
+SMUFL_NOTEHEAD_HALF           :: rune(0xE0A3)
+SMUFL_NOTEHEAD_BLACK          :: rune(0xE0A4)
+SMUFL_AUGMENTATION_DOT        :: rune(0xE1E7)
+SMUFL_FLAG_8TH_UP             :: rune(0xE240)
+SMUFL_FLAG_8TH_DOWN           :: rune(0xE241)
+SMUFL_FLAG_16TH_UP            :: rune(0xE242)
+SMUFL_FLAG_16TH_DOWN          :: rune(0xE243)
+SMUFL_FLAG_32ND_UP            :: rune(0xE244)
+SMUFL_FLAG_32ND_DOWN          :: rune(0xE245)
+SMUFL_ACCIDENTAL_FLAT         :: rune(0xE260)
+SMUFL_ACCIDENTAL_NATURAL      :: rune(0xE261)
+SMUFL_ACCIDENTAL_SHARP        :: rune(0xE262)
 SMUFL_ACCIDENTAL_DOUBLE_SHARP :: rune(0xE263)
-SMUFL_ACCIDENTAL_DOUBLE_FLAT :: rune(0xE264)
-SMUFL_REST_WHOLE :: rune(0xE4E3)
-SMUFL_REST_HALF :: rune(0xE4E4)
-SMUFL_REST_QUARTER :: rune(0xE4E5)
-SMUFL_REST_8TH :: rune(0xE4E6)
-SMUFL_REST_16TH :: rune(0xE4E7)
-SMUFL_REST_32ND :: rune(0xE4E8)
+SMUFL_ACCIDENTAL_DOUBLE_FLAT  :: rune(0xE264)
+SMUFL_REST_WHOLE              :: rune(0xE4E3)
+SMUFL_REST_HALF               :: rune(0xE4E4)
+SMUFL_REST_QUARTER            :: rune(0xE4E5)
+SMUFL_REST_8TH                :: rune(0xE4E6)
+SMUFL_REST_16TH               :: rune(0xE4E7)
+SMUFL_REST_32ND               :: rune(0xE4E8)
 
 SMUFL_GLYPHS := [?]rune {
 	SMUFL_G_CLEF,
@@ -133,10 +133,6 @@ Voice :: struct {
 	entries: [dynamic]Entry,
 }
 
-Staff_Measure :: struct {
-	voices: [dynamic]Voice,
-}
-
 Staff :: struct {
 	clef:     Clef,
 	measures: [dynamic]Staff_Measure,
@@ -149,8 +145,22 @@ Part :: struct {
 
 Measure_Meta :: struct {
 	time_sig: Rational, // e.g., {4, 4}
-	key_sig:  i8, // fifths: -7 (Cb) to +7 (C#)
+	key_sig:  i8,       // fifths: -7 (Cb) to +7 (C#)
 }
+
+Staff_Measure :: struct {
+	meta:   Measure_Meta,
+	voices: [dynamic]Voice,
+}
+
+Score :: struct {
+	version:  int,
+	title:    string,
+	composer: string,
+	page:     Page_Setup,
+	parts:    [dynamic]Part,
+}
+
 
 Page_Setup :: struct {
 	width_pt:       f32,
@@ -160,15 +170,6 @@ Page_Setup :: struct {
 	margin_left:    f32,
 	margin_right:   f32,
 	staff_space_pt: f32,
-}
-
-Score :: struct {
-	version:  int,
-	title:    string,
-	composer: string,
-	page:     Page_Setup,
-	measures: [dynamic]Measure_Meta,
-	parts:    [dynamic]Part,
 }
 
 default_page_setup :: proc() -> Page_Setup {
@@ -183,15 +184,22 @@ default_page_setup :: proc() -> Page_Setup {
 	}
 }
 
+measure_count :: proc(s: ^Score) -> int {
+	n := 0
+	for &part in s.parts {
+		for &staff in part.staves {
+			n = max(n, len(staff.measures))
+		}
+	}
+	return n
+}
+
 make_demo :: proc() -> Score {
 	s := Score {
 		version  = FORMAT_VERSION,
 		title    = strings.clone("Demo Score"),
 		composer = strings.clone("Anonymous"),
 		page     = default_page_setup(),
-	}
-	for _ in 0 ..< 4 {
-		append(&s.measures, Measure_Meta{time_sig = {4, 4}, key_sig = 1})
 	}
 	part := Part {
 		name = strings.clone("Piano"),
@@ -206,7 +214,12 @@ make_demo :: proc() -> Score {
 		{{.C, 5, 0}, {.B, 4, 0}, {.A, 4, 0}, {.G, 4, 0}},
 	}
 	for bar in demo_bars {
-		sm := Staff_Measure{}
+		sm := Staff_Measure {
+			meta = Measure_Meta {
+				time_sig = {4, 4},
+				key_sig  = 1,
+			},
+		}
 		v := Voice{}
 		for p in bar {
 			e := Entry {
@@ -237,48 +250,6 @@ save :: proc(s: ^Score, path: string) -> bool {
 	write_toml_string(&b, s.composer)
 	strings.write_byte(&b, '\n')
 
-	init_time := Rational{4, 4}
-	init_key: i8 = 0
-	if len(s.measures) > 0 {
-		init_time = s.measures[0].time_sig
-		init_key = s.measures[0].key_sig
-	}
-	fmt.sbprintfln(&b, "time = \"%d/%d\"", init_time.num, init_time.den)
-	fmt.sbprintfln(&b, "key = %d", init_key)
-
-	if has_global_changes(s.measures[:]) {
-		strings.write_string(&b, "global = \"|")
-		unchanged := 1 // bar 1 is already captured by top-level time/key
-		for i in 1 ..< len(s.measures) {
-			prev := s.measures[i - 1]
-			cur := s.measures[i]
-			time_changed := cur.time_sig != prev.time_sig
-			key_changed := cur.key_sig != prev.key_sig
-
-			if !time_changed && !key_changed {
-				unchanged += 1
-				continue
-			}
-
-			if unchanged == 1 {
-				strings.write_string(&b, " |")
-			}
-			else if unchanged > 1 {
-				fmt.sbprintf(&b, " x%d |", unchanged)
-			}
-			unchanged = 0
-
-			if time_changed {
-				fmt.sbprintf(&b, " time:%d/%d", cur.time_sig.num, cur.time_sig.den)
-			}
-			if key_changed {
-				fmt.sbprintf(&b, " key:%d", cur.key_sig)
-			}
-			strings.write_string(&b, " |")
-		}
-		strings.write_string(&b, "\"\n")
-	}
-
 	p := s.page
 	strings.write_string(&b, "\n[page]\n")
 	fmt.sbprintfln(&b, "width_pt = %g", p.width_pt)
@@ -299,22 +270,20 @@ save :: proc(s: ^Score, path: string) -> bool {
 			strings.write_string(&b, "\n[[parts.staves]]\n")
 			fmt.sbprintfln(&b, "clef = \"%s\"", clef_to_string(staff.clef))
 
+			if len(staff.measures) == 0 {
+				strings.write_string(&b, "voices = {}\n")
+				continue
+			}
+
 			max_voices := 0
 			for &sm in staff.measures {
 				max_voices = max(max_voices, len(sm.voices))
 			}
 
-			if max_voices == 0 {
-				strings.write_string(&b, "voices = {}\n")
-				continue
-			}
-
 			strings.write_string(&b, "voices = { ")
+			write_meta_voice(&b, staff.measures[:])
 			for v_idx in 0 ..< max_voices {
-				if v_idx > 0 {
-					strings.write_string(&b, ", ")
-				}
-				fmt.sbprintf(&b, "v%d = \"|", v_idx + 1)
+				fmt.sbprintf(&b, ", v%d = \"|", v_idx + 1)
 				for &sm in staff.measures {
 					if v_idx < len(sm.voices) {
 						last_dur := Rational{}
@@ -346,7 +315,7 @@ load :: proc(path: string) -> (s: Score, ok: bool) {
 	defer toml.destroy(root)
 
 	s.version = get_int(root, "version", 0)
-	if s.version == 0 {
+	if s.version != FORMAT_VERSION {
 		return {}, false
 	}
 
@@ -364,7 +333,6 @@ load :: proc(path: string) -> (s: Score, ok: bool) {
 		s.page.staff_space_pt = get_f32(page_tbl, "staff_space_pt", s.page.staff_space_pt)
 	}
 
-	max_measures := 0
 	if parts_arr, has_parts := get_array(root, "parts"); has_parts {
 		for p_item in parts_arr.items {
 			p_tbl, is_p_tbl := p_item.(^toml.Table)
@@ -387,8 +355,12 @@ load :: proc(path: string) -> (s: Score, ok: bool) {
 						clef = string_to_clef(get_string(st_tbl, "clef", "treble")),
 					}
 
+					meta_str := ""
 					if voices_tbl, has_voices := get_table(st_tbl, "voices"); has_voices {
 						for v_key, v_val in voices_tbl.entries {
+							if v_key == "meta" {
+								continue
+							}
 							v_idx, key_ok := parse_voice_key(v_key)
 							v_str, is_str := v_val.(string)
 							if !key_ok || !is_str {
@@ -396,9 +368,10 @@ load :: proc(path: string) -> (s: Score, ok: bool) {
 							}
 							parse_voice_text(v_str, &staff, v_idx)
 						}
+						meta_str = get_string(voices_tbl, "meta", "")
 					}
+					parse_meta_voice(meta_str, &staff)
 
-					max_measures = max(max_measures, len(staff.measures))
 					append(&part.staves, staff)
 				}
 			}
@@ -407,27 +380,12 @@ load :: proc(path: string) -> (s: Score, ok: bool) {
 		}
 	}
 
-	init_time := Rational{4, 4}
-	if ts, ts_ok := parse_rational(get_string(root, "time", "4/4")); ts_ok {
-		init_time = ts
-	}
-	init_key := i8(get_int(root, "key", 0))
-
-	for _ in 0 ..< max_measures {
-		append(&s.measures, Measure_Meta{time_sig = init_time, key_sig = init_key})
-	}
-
-	if global_str := get_string(root, "global", ""); len(global_str) > 0 {
-		apply_global_stream(global_str, &s.measures, init_time, init_key)
-	}
-
 	return s, true
 }
 
 destroy :: proc(s: ^Score) {
 	delete(s.title)
 	delete(s.composer)
-	delete(s.measures)
 	for &part in s.parts {
 		delete(part.name)
 		for &staff in part.staves {
@@ -445,6 +403,107 @@ destroy :: proc(s: ^Score) {
 		delete(part.staves)
 	}
 	delete(s.parts)
+}
+
+@(private = "file")
+write_meta_voice :: proc(b: ^strings.Builder, measures: []Staff_Measure) {
+	strings.write_string(b, "meta = \"|")
+	for &m, i in measures {
+		cur := m.meta
+		if i == 0 {
+			fmt.sbprintf(b, " time:%d/%d key:%d |", cur.time_sig.num, cur.time_sig.den, cur.key_sig)
+			continue
+		}
+		prev := measures[i - 1].meta
+		time_changed := cur.time_sig != prev.time_sig
+		key_changed := cur.key_sig != prev.key_sig
+		if time_changed {
+			fmt.sbprintf(b, " time:%d/%d", cur.time_sig.num, cur.time_sig.den)
+		}
+		if key_changed {
+			fmt.sbprintf(b, " key:%d", cur.key_sig)
+		}
+		strings.write_string(b, " |")
+	}
+	strings.write_byte(b, '"')
+}
+
+@(private = "file")
+parse_meta_voice :: proc(text: string, staff: ^Staff) {
+	cur_bar := 0
+	cur_time := Rational{4, 4}
+	cur_key: i8 = 0
+
+	if len(text) > 0 {
+		rest := text
+		for raw_line in strings.split_lines_iterator(&rest) {
+			line := strings.trim_space(raw_line)
+			if len(line) == 0 || line[0] != '|' {
+				continue
+			}
+			trimmed := strings.trim_suffix(strings.trim_prefix(line, "|"), "|")
+			for bar_text in strings.split_iterator(&trimmed, "|") {
+				seg := strings.trim_space(bar_text)
+
+				if len(seg) > 0 {
+					tokens := strings.fields(seg)
+					defer delete(tokens)
+
+					if len(tokens) == 1 &&
+					   len(tokens[0]) >= 2 &&
+					   (tokens[0][0] == 'x' || tokens[0][0] == 'X') {
+						if skip, ok := strconv.parse_int(tokens[0][1:]); ok && skip > 0 {
+							for _ in 0 ..< skip {
+								ensure_staff_measure(staff, cur_bar, cur_time, cur_key)
+								cur_bar += 1
+							}
+							continue
+						}
+					}
+
+					for tok in tokens {
+						colon := strings.index_byte(tok, ':')
+						if colon < 0 {
+							continue
+						}
+						k := tok[:colon]
+						v := tok[colon + 1:]
+						switch k {
+						case "time":
+							if ts, ok := parse_rational(v); ok {
+								cur_time = ts
+							}
+						case "key":
+							if fifths, ok := strconv.parse_int(v); ok {
+								cur_key = i8(fifths)
+							}
+						}
+					}
+				}
+
+				ensure_staff_measure(staff, cur_bar, cur_time, cur_key)
+				cur_bar += 1
+			}
+		}
+	}
+
+	for i in cur_bar ..< len(staff.measures) {
+		staff.measures[i].meta = Measure_Meta {
+			time_sig = cur_time,
+			key_sig  = cur_key,
+		}
+	}
+}
+
+@(private = "file")
+ensure_staff_measure :: proc(staff: ^Staff, bar_idx: int, ts: Rational, key: i8) {
+	for len(staff.measures) <= bar_idx {
+		append(&staff.measures, Staff_Measure{})
+	}
+	staff.measures[bar_idx].meta = Measure_Meta {
+		time_sig = ts,
+		key_sig  = key,
+	}
 }
 
 @(private = "file")
@@ -781,7 +840,6 @@ parse_note :: proc(tok: string) -> (n: Note, ok: bool) {
 	if len(s) < 2 {
 		return {}, false
 	}
-
 	switch s[0] {
 	case 'C', 'c':
 		n.pitch.step = .C
