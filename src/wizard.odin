@@ -18,6 +18,32 @@ apply_wizard_result :: proc(
 	cam^ = utils.fit_camera_to_page(s.page, win_w, win_h)
 	wiz.active = false
 	wiz.focus = .None
+	wiz.selecting_text = false
+}
+
+open_wizard_file :: proc(
+	s: ^utils.Score,
+	cam: ^utils.Camera,
+	sel: ^utils.Selection,
+	wiz: ^utils.Wizard_State,
+	win_w, win_h: f32,
+) -> bool {
+	if wiz.selected_file < 0 || wiz.selected_file >= len(wiz.open_files) {
+		return false
+	}
+	path := wiz.open_files[wiz.selected_file]
+	loaded_score, ok := score.load(path)
+	if !ok {
+		return false
+	}
+	score.destroy(s)
+	s^ = loaded_score
+	sel^ = {}
+	cam^ = utils.fit_camera_to_page(s.page, win_w, win_h)
+	wiz.active = false
+	wiz.focus = .None
+	wiz.selecting_text = false
+	return true
 }
 
 handle_wizard_event :: proc(
@@ -56,6 +82,8 @@ handle_wizard_event :: proc(
 		case .Finish:
 			apply_wizard_result(s, cam, sel, wiz, win_w, win_h)
 			return true
+		case .Open_File:
+			return open_wizard_file(s, cam, sel, wiz, win_w, win_h)
 		}
 	case utils.Event_Mouse_Down:
 		if e.button == .Left {
@@ -74,6 +102,8 @@ handle_wizard_event :: proc(
 			case .Finish:
 				apply_wizard_result(s, cam, sel, wiz, win_w, win_h)
 				return true
+			case .Open_File:
+				return open_wizard_file(s, cam, sel, wiz, win_w, win_h)
 			}
 		}
 	case utils.Event_Mouse_Move:
@@ -87,3 +117,4 @@ handle_wizard_event :: proc(
 	}
 	return false
 }
+

@@ -330,19 +330,6 @@ toolbar_click :: proc(tool: ^utils.Editor_Tool, mx, my: f32) -> utils.Toolbar_Ac
 	return .None
 }
 
-wizard_scroll :: proc(wiz: ^utils.Wizard_State, dy: i32) -> bool {
-	if wiz.step != .Instruments || len(wiz.parts) <= utils.WIZ_VISIBLE_PART_ROWS || dy == 0 {
-		return false
-	}
-	max_scroll := len(wiz.parts) - utils.WIZ_VISIBLE_PART_ROWS
-	next := clamp(wiz.part_scroll - int(dy), 0, max_scroll)
-	if next != wiz.part_scroll {
-		wiz.part_scroll = next
-		return true
-	}
-	return false
-}
-
 begin_frame :: proc(w: ^utils.Window, clear_color: [4]f32) {
 	sdl.GL_GetDrawableSize(w.handle, &w.draw_w, &w.draw_h)
 	sdl.GetWindowSize(w.handle, &w.win_w, &w.win_h)
@@ -360,7 +347,7 @@ end_frame :: proc(w: ^utils.Window, cam: utils.Camera) {
 }
 
 @(private = "file")
-wizard_focused_rect :: proc(wl: Wizard_Layout, focus: utils.Wizard_Field) -> (utils.Rect, bool) {
+wizard_focused_rect :: proc(wl: utils.Wizard_Layout, focus: utils.Wizard_Field) -> (utils.Rect, bool) {
 	switch focus {
 	case .Title:
 		return wl.field_title, true
@@ -375,6 +362,83 @@ wizard_focused_rect :: proc(wl: Wizard_Layout, focus: utils.Wizard_Field) -> (ut
 	}
 	return {}, false
 }
+ 
+wizard_mouse_move :: proc(
+	wiz: ^utils.Wizard_State,
+	fonts: ^utils.Fonts,
+	win_w, win_h, mx, my: f32,
+) -> bool {
+	if !wiz.selecting_text {
+		return false
+	}
+	// Safety check: if the left button was released outside the window, stop selecting.
+	if (sdl.GetMouseState(nil, nil) & sdl.BUTTON_LMASK) == 0 {
+		wiz.selecting_text = false
+		return false
+	}
+	tb := utils.wizard_active_buf(wiz)
+	if tb == nil {
+		wiz.selecting_text = false
+		return false
+	}
+	wl := compute_wizard_layout(win_w, win_h)
+	r, ok := wizard_focused_rect(wl, wiz.focus)
+	if !ok {
+		return false
+	}
+	next_caret := utils.caret_from_click(&fonts.text, utils.text_buf_str(tb), r.x + 8.0, mx, 13.0)
+	if next_caret != wiz.caret {
+		wiz.caret = next_caret
+		return true
+	}
+	return false
+}
+
+wizard_mouse_up :: proc(wiz: ^utils.Wizard_State) {
+	wiz.selecting_text = false
+}
+
+wizard_text_input :: proc(wiz: ^utils.Wizard_State, e: utils.Event_Text_Input) -> bool {
+	tb := utils.wizard_active_buf(wiz)
+	if tb == nil || e.len <= 0 {
+		return false
+	}
+	changed := false
+	if lo, hi, has_sel := utils.wizard_sel_range(wiz, tb.len); has_sel {
+		changed = utils.text_buf_delete_range(tb, lo, hi)
+		wiz.caret = lo
+		wiz.sel_anchor = lo
+	}
+	text := e.text
+	if utils.text_buf_insert_ascii(tb, &wiz.caret, text[:e.len]) {
+		wiz.sel_anchor = wiz.caret
+		changed = true
+	}
+	return changed
+}
+
+wizard_scroll :: proc(wiz: ^utils.Wizard_State, dy: i32) -> bool {
+	if dy == 0 {
+		return false
+	}
+	if wiz.step == .Instruments && len(wiz.parts) > utils.WIZ_VISIBLE_PART_ROWS {
+		max_scroll := len(wiz.parts) - utils.WIZ_VISIBLE_PART_ROWS
+		next := clamp(wiz.part_scroll - int(dy), 0, max_scroll)
+		if next != wiz.part_scroll {
+			wiz.part_scroll = next
+			return true
+		}
+	}
+	else if wiz.step == .Open_File && len(wiz.open_files) > utils.WIZ_VISIBLE_FILE_ROWS {
+		max_scroll := len(wiz.open_files) - utils.WIZ_VISIBLE_FILE_ROWS
+		next := clamp(wiz.file_scroll - int(dy), 0, max_scroll)
+		if next != wiz.file_scroll {
+			wiz.file_scroll = next
+			return true
+		}
+	}
+	return false
+}
 
 wizard_click :: proc(
 	wiz: ^utils.Wizard_State,
@@ -384,11 +448,22 @@ wizard_click :: proc(
 	wl := compute_wizard_layout(win_w, win_h)
 	text_atlas := &fonts.text
 	wiz.selecting_text = false
-
+	if utils.rect_contains(wl.btn_open_mode, mx, my) {
+		if wiz.step == .Open_File {
+			wiz.step = .Document
+			utils.wizard_focus_field(wiz, .Title)
+		}
+		else {
+			utils.wizard_refresh_files(wiz)
+			wiz.step = .Open_File
+			utils.wizard_focus_field(wiz, .None)
+		}
+		return .Redraw
+	}
 	if wiz.can_cancel && utils.rect_contains(wl.btn_cancel, mx, my) {
 		return .Cancel
 	}
-	if wiz.step != .Document && utils.rect_contains(wl.btn_back, mx, my) {
+	if (wiz.step == .Instruments || wiz.step == .Time_And_Key) && utils.rect_contains(wl.btn_back, mx, my) {
 		if wiz.step == .Time_And_Key {
 			wiz.step = .Instruments
 			utils.wizard_focus_field(wiz, .None)
@@ -411,9 +486,13 @@ wizard_click :: proc(
 			return .Redraw
 		case .Time_And_Key:
 			return .Finish
+		case .Open_File:
+			if wiz.selected_file >= 0 && wiz.selected_file < len(wiz.open_files) {
+				return .Open_File
+			}
+			return .None
 		}
 	}
-
 	switch wiz.step {
 	case .Document:
 		if utils.rect_contains(wl.field_title, mx, my) {
@@ -482,7 +561,6 @@ wizard_click :: proc(
 			wiz.landscape = true
 			return .Redraw
 		}
-
 	case .Instruments:
 		for i in 0 ..< 5 {
 			if utils.rect_contains(wl.btn_ensemble[i], mx, my) {
@@ -505,7 +583,6 @@ wizard_click :: proc(
 		if utils.rect_contains(wl.btn_add_part[4], mx, my) {
 			if utils.wizard_add_part(wiz, "Piano", .Treble, true) {return .Redraw}
 		}
-
 		for vis_i in 0 ..< utils.WIZ_VISIBLE_PART_ROWS {
 			p_idx := wiz.part_scroll + vis_i
 			if p_idx >= len(wiz.parts) {
@@ -519,7 +596,6 @@ wizard_click :: proc(
 				return .Redraw
 			}
 		}
-
 		if utils.rect_contains(wl.btn_part_up, mx, my) {
 			if wiz.selected_part > 0 && wiz.selected_part < len(wiz.parts) {
 				wiz.parts[wiz.selected_part], wiz.parts[wiz.selected_part - 1] =
@@ -548,7 +624,6 @@ wizard_click :: proc(
 				return .Redraw
 			}
 		}
-
 		if wiz.selected_part >= 0 && wiz.selected_part < len(wiz.parts) {
 			sel_part := &wiz.parts[wiz.selected_part]
 			if utils.rect_contains(wl.field_part_name, mx, my) {
@@ -581,7 +656,6 @@ wizard_click :: proc(
 				}
 			}
 		}
-
 	case .Time_And_Key:
 		ts_presets := [6]utils.Rational{{4, 4}, {3, 4}, {2, 4}, {6, 8}, {2, 2}, {12, 8}}
 		for ts, i in ts_presets {
@@ -606,7 +680,6 @@ wizard_click :: proc(
 			wiz.time_sig.den = utils.step_beat_unit(wiz.time_sig.den, 1)
 			return .Redraw
 		}
-
 		bar_deltas := [4]int{-4, -1, 1, 4}
 		for delta, i in bar_deltas {
 			if utils.rect_contains(wl.btn_bars[i], mx, my) {
@@ -618,7 +691,6 @@ wizard_click :: proc(
 			wiz.fill_rests = !wiz.fill_rests
 			return .Redraw
 		}
-
 		if utils.rect_contains(wl.btn_key_mode[0], mx, my) {
 			wiz.is_minor = false
 			return .Redraw
@@ -635,48 +707,23 @@ wizard_click :: proc(
 			wiz.fifths = clamp(wiz.fifths + 1, -7, 7)
 			return .Redraw
 		}
+	case .Open_File:
+		for vis_i in 0 ..< utils.WIZ_VISIBLE_FILE_ROWS {
+			f_idx := wiz.file_scroll + vis_i
+			if f_idx >= len(wiz.open_files) {
+				break
+			}
+			if utils.rect_contains(wl.file_rows[vis_i], mx, my) {
+				wiz.selected_file = f_idx
+				return .Redraw
+			}
+		}
 	}
-
 	if wiz.focus != .None {
 		wiz.focus = .None
 		return .Redraw
 	}
 	return .None
-}
-
-wizard_mouse_move :: proc(
-	wiz: ^utils.Wizard_State,
-	fonts: ^utils.Fonts,
-	win_w, win_h, mx, my: f32,
-) -> bool {
-	if !wiz.selecting_text {
-		return false
-	}
-	// Safety check: if the left button was released outside the window, stop selecting.
-	if (sdl.GetMouseState(nil, nil) & sdl.BUTTON_LMASK) == 0 {
-		wiz.selecting_text = false
-		return false
-	}
-	tb := utils.wizard_active_buf(wiz)
-	if tb == nil {
-		wiz.selecting_text = false
-		return false
-	}
-	wl := compute_wizard_layout(win_w, win_h)
-	r, ok := wizard_focused_rect(wl, wiz.focus)
-	if !ok {
-		return false
-	}
-	next_caret := utils.caret_from_click(&fonts.text, utils.text_buf_str(tb), r.x + 8.0, mx, 13.0)
-	if next_caret != wiz.caret {
-		wiz.caret = next_caret
-		return true
-	}
-	return false
-}
-
-wizard_mouse_up :: proc(wiz: ^utils.Wizard_State) {
-	wiz.selecting_text = false
 }
 
 wizard_key_down :: proc(wiz: ^utils.Wizard_State, e: utils.Event_Key_Down) -> utils.Wizard_Action {
@@ -807,11 +854,21 @@ wizard_key_down :: proc(wiz: ^utils.Wizard_State, e: utils.Event_Key_Down) -> ut
 			return .Redraw
 		case .Time_And_Key:
 			return .Finish
+		case .Open_File:
+			if wiz.selected_file >= 0 && wiz.selected_file < len(wiz.open_files) {
+				return .Open_File
+			}
+			return .None
 		}
 	case .Up:
 		if wiz.step == .Instruments && wiz.focus == .None && wiz.selected_part > 0 {
 			wiz.selected_part -= 1
 			utils.wizard_clamp_scroll(wiz)
+			return .Redraw
+		}
+		if wiz.step == .Open_File && wiz.selected_file > 0 {
+			wiz.selected_file -= 1
+			utils.wizard_clamp_file_scroll(wiz)
 			return .Redraw
 		}
 	case .Down:
@@ -822,26 +879,11 @@ wizard_key_down :: proc(wiz: ^utils.Wizard_State, e: utils.Event_Key_Down) -> ut
 			utils.wizard_clamp_scroll(wiz)
 			return .Redraw
 		}
+		if wiz.step == .Open_File && wiz.selected_file + 1 < len(wiz.open_files) {
+			wiz.selected_file += 1
+			utils.wizard_clamp_file_scroll(wiz)
+			return .Redraw
+		}
 	}
 	return .None
 }
-
-wizard_text_input :: proc(wiz: ^utils.Wizard_State, e: utils.Event_Text_Input) -> bool {
-	tb := utils.wizard_active_buf(wiz)
-	if tb == nil || e.len <= 0 {
-		return false
-	}
-	changed := false
-	if lo, hi, has_sel := utils.wizard_sel_range(wiz, tb.len); has_sel {
-		changed = utils.text_buf_delete_range(tb, lo, hi)
-		wiz.caret = lo
-		wiz.sel_anchor = lo
-	}
-	text := e.text
-	if utils.text_buf_insert_ascii(tb, &wiz.caret, text[:e.len]) {
-		wiz.sel_anchor = wiz.caret
-		changed = true
-	}
-	return changed
-}
-

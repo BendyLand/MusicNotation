@@ -3,6 +3,7 @@ package utils
 import "../toml"
 import "core:fmt"
 import "core:os"
+import "core:slice"
 import "core:strconv"
 import "core:strings"
 import sdl "vendor:sdl2"
@@ -191,6 +192,75 @@ wizard_focus_field :: proc(wiz: ^Wizard_State, field: Wizard_Field) {
 	}
 }
 
+wizard_clamp_file_scroll :: proc(wiz: ^Wizard_State) {
+	if len(wiz.open_files) == 0 {
+		wiz.selected_file = 0
+		wiz.file_scroll = 0
+		return
+	}
+	wiz.selected_file = clamp(wiz.selected_file, 0, len(wiz.open_files) - 1)
+	if wiz.selected_file < wiz.file_scroll {
+		wiz.file_scroll = wiz.selected_file
+	}
+	if wiz.selected_file >= wiz.file_scroll + WIZ_VISIBLE_FILE_ROWS {
+		wiz.file_scroll = wiz.selected_file - WIZ_VISIBLE_FILE_ROWS + 1
+	}
+	max_scroll := max(0, len(wiz.open_files) - WIZ_VISIBLE_FILE_ROWS)
+	wiz.file_scroll = clamp(wiz.file_scroll, 0, max_scroll)
+}
+
+wizard_refresh_files :: proc(wiz: ^Wizard_State) {
+	for f in wiz.open_files {
+		delete(f)
+	}
+	clear(&wiz.open_files)
+	wiz.selected_file = 0
+	wiz.file_scroll = 0
+
+	fis, err := os.read_all_directory_by_path(".", context.allocator)
+	if err != nil {
+		return
+	}
+	defer os.file_info_slice_delete(fis, context.allocator)
+
+	for fi in fis {
+		if fi.type != .Directory && strings.has_suffix(fi.name, ".toml") {
+			append(&wiz.open_files, strings.clone(fi.name))
+		}
+	}
+	slice.sort(wiz.open_files[:])
+	wizard_clamp_file_scroll(wiz)
+}
+
+wizard_init :: proc(wiz: ^Wizard_State, can_cancel: bool) {
+	wiz.active = true
+	wiz.can_cancel = can_cancel
+	wiz.step = .Document
+	text_buf_set(&wiz.title, "Untitled Score")
+	text_buf_set(&wiz.subtitle, "")
+	text_buf_set(&wiz.composer, "")
+	wiz.page_size = .Letter
+	wiz.landscape = false
+	wiz.staff_size = .Medium
+	wizard_apply_ensemble(wiz, .Grand_Staff)
+	wiz.time_sig = {4, 4}
+	wiz.fifths = 0
+	wiz.is_minor = false
+	wiz.measure_count = 4
+	wiz.fill_rests = false
+	wiz.selecting_text = false
+	wizard_refresh_files(wiz)
+	wizard_focus_field(wiz, .Title)
+}
+
+wizard_destroy :: proc(wiz: ^Wizard_State) {
+	delete(wiz.parts)
+	for f in wiz.open_files {
+		delete(f)
+	}
+	delete(wiz.open_files)
+}
+
 wizard_clamp_scroll :: proc(wiz: ^Wizard_State) {
 	if len(wiz.parts) == 0 {
 		wiz.selected_part = 0
@@ -250,30 +320,6 @@ wizard_add_part :: proc(wiz: ^Wizard_State, name: string, clef: Clef, is_grand :
 		wizard_focus_field(wiz, .Part_Name)
 	}
 	return true
-}
-
-wizard_init :: proc(wiz: ^Wizard_State, can_cancel: bool) {
-	wiz.active = true
-	wiz.can_cancel = can_cancel
-	wiz.step = .Document
-	text_buf_set(&wiz.title, "Untitled Score")
-	text_buf_set(&wiz.subtitle, "")
-	text_buf_set(&wiz.composer, "")
-	wiz.page_size = .Letter
-	wiz.landscape = false
-	wiz.staff_size = .Medium
-	wizard_apply_ensemble(wiz, .Grand_Staff)
-	wiz.time_sig = {4, 4}
-	wiz.fifths = 0
-	wiz.is_minor = false
-	wiz.measure_count = 4
-	wiz.fill_rests = false
-	wizard_focus_field(wiz, .Title)
-}
-
-wizard_destroy :: proc(wiz: ^Wizard_State) {
-	delete(wiz.parts)
-	wiz.parts = nil
 }
 
 wizard_page_setup :: proc(wiz: ^Wizard_State) -> Page_Setup {
@@ -1373,41 +1419,6 @@ measure_notes_bounds :: proc(
 	return notes_x0, usable_w
 }
 
-hit_test_measure :: proc(s: ^Score, atlas: ^Glyph_Atlas, world_pos: [2]f32) -> Selection {
-	layout := compute_score_layout(s, atlas)
-	hit_pad_y := layout.space * 3.0
-
-	for sys_idx in 0 ..< layout.system_count {
-		sys := layout.systems[sys_idx]
-		if world_pos.x < sys.music_x0 {
-			continue
-		}
-		local_m := int((world_pos.x - sys.music_x0) / sys.measure_w)
-		m_idx := sys.start_measure + local_m
-		if local_m < 0 || m_idx >= sys.end_measure {
-			continue
-		}
-
-		staff_y := sys.y
-		for &part, p_idx in s.parts {
-			for &staff, s_idx in part.staves {
-				if m_idx < len(staff.measures) &&
-				   world_pos.y >= staff_y - hit_pad_y &&
-				   world_pos.y <= staff_y + layout.staff_h + hit_pad_y {
-					return Selection {
-						active = true,
-						part_idx = p_idx,
-						staff_idx = s_idx,
-						measure_idx = m_idx,
-					}
-				}
-				staff_y += layout.staff_step_y
-			}
-		}
-	}
-	return {}
-}
-
 resolve_note_target :: proc(
 	s: ^Score,
 	atlas: ^Glyph_Atlas,
@@ -1795,7 +1806,13 @@ write_pdf_document :: proc(
 	return os.write_entire_file(path, pdf.buf[:]) == nil
 }
 
-find_system_for_measure :: proc(layout: ^Score_Layout, m_idx: int) -> (sys: System_Layout, ok: bool) {
+find_system_for_measure :: proc(
+	layout: ^Score_Layout,
+	m_idx: int,
+) -> (
+	sys: System_Layout,
+	ok: bool,
+) {
 	for i in 0 ..< layout.system_count {
 		s := layout.systems[i]
 		if m_idx >= s.start_measure && m_idx < s.end_measure {
@@ -1827,3 +1844,140 @@ is_system_locked :: proc(s: ^Score, sys: System_Layout, total_measures: int) -> 
 	return true
 }
 
+rects_overlap :: proc(a, b: Rect) -> bool {
+	return a.x <= b.x + b.w && a.x + a.w >= b.x && a.y <= b.y + b.h && a.y + a.h >= b.y
+}
+
+total_staff_count :: proc(s: ^Score) -> int {
+	total := 0
+	for &part in s.parts {
+		total += len(part.staves)
+	}
+	return total
+}
+
+staff_at_flat_index :: proc(s: ^Score, flat_idx: int) -> (part_idx, staff_idx: int, ok: bool) {
+	if flat_idx < 0 {
+		return 0, 0, false
+	}
+	cur := 0
+	for &part, p_idx in s.parts {
+		for _, s_idx in part.staves {
+			if cur == flat_idx {
+				return p_idx, s_idx, true
+			}
+			cur += 1
+		}
+	}
+	return 0, 0, false
+}
+
+select_all_measures :: proc(s: ^Score) -> Selection {
+	staves := total_staff_count(s)
+	bars := measure_count(s)
+	if staves <= 0 || bars <= 0 {
+		return {}
+	}
+	return Selection {
+		active = true,
+		start_staff = 0,
+		end_staff = staves - 1,
+		start_measure = 0,
+		end_measure = bars - 1,
+	}
+}
+
+hit_test_measure :: proc(s: ^Score, atlas: ^Glyph_Atlas, world_pos: [2]f32) -> Selection {
+	layout := compute_score_layout(s, atlas)
+	hit_pad_y := layout.space * 3.0
+
+	for sys_idx in 0 ..< layout.system_count {
+		sys := layout.systems[sys_idx]
+		if world_pos.x < sys.music_x0 {
+			continue
+		}
+		local_m := int((world_pos.x - sys.music_x0) / sys.measure_w)
+		m_idx := sys.start_measure + local_m
+		if local_m < 0 || m_idx >= sys.end_measure {
+			continue
+		}
+
+		staff_y := sys.y
+		flat_s := 0
+		for &part in s.parts {
+			for &staff in part.staves {
+				if m_idx < len(staff.measures) &&
+				   world_pos.y >= staff_y - hit_pad_y &&
+				   world_pos.y <= staff_y + layout.staff_h + hit_pad_y {
+					return Selection {
+						active = true,
+						start_staff = flat_s,
+						end_staff = flat_s,
+						start_measure = m_idx,
+						end_measure = m_idx,
+					}
+				}
+				staff_y += layout.staff_step_y
+				flat_s += 1
+			}
+		}
+	}
+	return {}
+}
+
+select_measures_in_rect :: proc(s: ^Score, atlas: ^Glyph_Atlas, world_r: Rect) -> Selection {
+	layout := compute_score_layout(s, atlas)
+	found := false
+	min_s := max(int)
+	max_s := -1
+	min_m := max(int)
+	max_m := -1
+
+	for sys_idx in 0 ..< layout.system_count {
+		sys := layout.systems[sys_idx]
+		sys_rect := Rect {
+			x = sys.music_x0,
+			y = sys.y,
+			w = f32(sys.end_measure - sys.start_measure) * sys.measure_w,
+			h = layout.system_h,
+		}
+		if !rects_overlap(world_r, sys_rect) {
+			continue
+		}
+
+		staff_y := sys.y
+		flat_s := 0
+		for &part in s.parts {
+			for &staff in part.staves {
+				for m_idx in sys.start_measure ..< min(sys.end_measure, len(staff.measures)) {
+					bar_r := Rect {
+						x = sys.music_x0 + f32(m_idx - sys.start_measure) * sys.measure_w,
+						y = staff_y,
+						w = sys.measure_w,
+						h = layout.staff_h,
+					}
+					if rects_overlap(world_r, bar_r) {
+						found = true
+						min_s = min(min_s, flat_s)
+						max_s = max(max_s, flat_s)
+						min_m = min(min_m, m_idx)
+						max_m = max(max_m, m_idx)
+					}
+				}
+				staff_y += layout.staff_step_y
+				flat_s += 1
+			}
+		}
+	}
+
+	if !found {
+		return {}
+	}
+	return Selection {
+		active = true,
+		start_staff = min_s,
+		end_staff = max_s,
+		start_measure = min_m,
+		end_measure = max_m,
+	}
+}

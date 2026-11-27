@@ -53,58 +53,14 @@ void main() {
 }
 `
 
-WIZ_CARD_W :: f32(640.0)
-WIZ_CARD_H :: f32(480.0)
-
-Wizard_Layout :: struct {
-	card:            utils.Rect,
-	btn_cancel:      utils.Rect,
-	btn_back:        utils.Rect,
-	btn_next:        utils.Rect,
-	// Step 1: Document
-	field_title:     utils.Rect,
-	field_subtitle:  utils.Rect,
-	field_composer:  utils.Rect,
-	btn_staff_size:  [3]utils.Rect,
-	btn_page_size:   [3]utils.Rect,
-	btn_orient:      [2]utils.Rect,
-	page_preview:    utils.Rect,
-	// Step 2: Instruments
-	btn_ensemble:    [5]utils.Rect,
-	btn_add_part:    [5]utils.Rect,
-	part_list:       utils.Rect,
-	part_rows:       [utils.WIZ_VISIBLE_PART_ROWS]utils.Rect,
-	btn_part_up:     utils.Rect,
-	btn_part_down:   utils.Rect,
-	btn_part_remove: utils.Rect,
-	field_part_name: utils.Rect,
-	btn_part_clef:   [5]utils.Rect,
-	// Step 3: Time & Key
-	btn_ts_preset:   [6]utils.Rect,
-	btn_ts_num_dec:  utils.Rect,
-	btn_ts_num_inc:  utils.Rect,
-	ts_num_box:      utils.Rect,
-	btn_ts_den_dec:  utils.Rect,
-	btn_ts_den_inc:  utils.Rect,
-	ts_den_box:      utils.Rect,
-	ts_preview:      utils.Rect,
-	btn_bars:        [4]utils.Rect,
-	bars_box:        utils.Rect,
-	btn_fill_rests:  utils.Rect,
-	btn_key_mode:    [2]utils.Rect,
-	btn_key_flat:    utils.Rect,
-	btn_key_sharp:   utils.Rect,
-	key_name_box:    utils.Rect,
-	ks_preview:      utils.Rect,
-}
-
-compute_wizard_layout :: proc(win_w, win_h: f32) -> Wizard_Layout {
-	l: Wizard_Layout
-	card_w := min(WIZ_CARD_W, max(300.0, win_w - 24.0))
-	card_h := min(WIZ_CARD_H, max(220.0, win_h - 24.0))
+compute_wizard_layout :: proc(win_w, win_h: f32) -> utils.Wizard_Layout {
+	l: utils.Wizard_Layout
+	card_w := min(utils.WIZ_CARD_W, max(300.0, win_w - 24.0))
+	card_h := min(utils.WIZ_CARD_H, max(220.0, win_h - 24.0))
 	cx := (win_w - card_w) * 0.5
 	cy := (win_h - card_h) * 0.5
 	l.card = {cx, cy, card_w, card_h}
+	l.btn_open_mode = {cx + card_w - 116.0, cy + 8.0, 100.0, 28.0}
 
 	footer_y := cy + card_h - 40.0
 	l.btn_cancel = {cx + 20.0, footer_y, 88.0, 28.0}
@@ -206,7 +162,569 @@ compute_wizard_layout :: proc(win_w, win_h: f32) -> Wizard_Layout {
 	l.btn_key_sharp = {tk_rx + half_w - 74.0, body_y + 56.0, 74.0, 28.0}
 	l.ks_preview = {tk_rx, body_y + 100.0, half_w, 176.0}
 
+	// Open File view
+	file_row_h: f32 = 30.0
+	file_list_h := f32(utils.WIZ_VISIBLE_FILE_ROWS) * file_row_h + 8.0
+	l.file_list = {body_x, body_y + 18.0, body_w, file_list_h}
+	for i in 0 ..< utils.WIZ_VISIBLE_FILE_ROWS {
+		l.file_rows[i] = {
+			body_x + 4.0,
+			body_y + 22.0 + f32(i) * file_row_h,
+			body_w - 8.0,
+			file_row_h - 2.0,
+		}
+	}
+
 	return l
+}
+
+draw_wizard :: proc(
+	l: ^utils.Layer,
+	wiz: ^utils.Wizard_State,
+	fonts: ^utils.Fonts,
+	win_w, win_h: f32,
+) {
+	music_atlas := &fonts.music
+	text_atlas := &fonts.text
+	wl := compute_wizard_layout(win_w, win_h)
+	c := wl.card
+
+	draw_rect(l, 0, 0, win_w, win_h, {0.05, 0.06, 0.08, 0.72})
+	draw_rect(l, c.x + 6.0, c.y + 8.0, c.w, c.h, {0.0, 0.0, 0.0, 0.45})
+	draw_rect(l, c.x, c.y, c.w, c.h, {0.16, 0.17, 0.20, 1.0})
+	draw_rect(l, c.x, c.y, c.w, 44.0, {0.12, 0.13, 0.16, 1.0})
+	draw_rect(l, c.x, c.y + 44.0, c.w, 1.0, {0.26, 0.28, 0.33, 1.0})
+	draw_rect(l, c.x, c.y + c.h - 52.0, c.w, 1.0, {0.26, 0.28, 0.33, 1.0})
+	draw_rect_outline(l, c.x, c.y, c.w, c.h, 1.0, {0.32, 0.35, 0.42, 1.0})
+
+	step_titles := [utils.Wizard_Step]string {
+		.Document     = "Document Setup Wizard  -  Step 1 of 3: Document & Page",
+		.Instruments  = "Document Setup Wizard  -  Step 2 of 3: Ensemble & Staves",
+		.Time_And_Key = "Document Setup Wizard  -  Step 3 of 3: Time, Key & Measures",
+		.Open_File    = "Open Score  -  Working Directory (.toml)",
+	}
+	header_by := utils.text_baseline_in_rect(text_atlas, c.y, 44.0, 13.5)
+	draw_text(
+		l,
+		text_atlas,
+		step_titles[wiz.step],
+		c.x + 18.0,
+		header_by,
+		13.5,
+		{0.95, 0.96, 0.99, 1.0},
+	)
+	mode_label := wiz.step == .Open_File ? "New Score" : "Open File..."
+	draw_wizard_button(l, text_atlas, mode_label, wl.btn_open_mode, wiz.step == .Open_File, false)
+
+	label_col := [4]f32{0.76, 0.79, 0.85, 1.0}
+
+	switch wiz.step {
+	case .Document:
+		draw_wizard_text_input(
+			l,
+			text_atlas,
+			"Title",
+			&wiz.title,
+			wiz.focus == .Title,
+			wiz.caret,
+			wiz.sel_anchor,
+			wl.field_title,
+		)
+		draw_wizard_text_input(
+			l,
+			text_atlas,
+			"Subtitle",
+			&wiz.subtitle,
+			wiz.focus == .Subtitle,
+			wiz.caret,
+			wiz.sel_anchor,
+			wl.field_subtitle,
+		)
+		draw_wizard_text_input(
+			l,
+			text_atlas,
+			"Composer",
+			&wiz.composer,
+			wiz.focus == .Composer,
+			wiz.caret,
+			wiz.sel_anchor,
+			wl.field_composer,
+		)
+
+		draw_text(
+			l,
+			text_atlas,
+			"Staff Size",
+			wl.btn_staff_size[0].x,
+			wl.btn_staff_size[0].y - 6.0,
+			12.0,
+			label_col,
+		)
+		staff_labels := [3]string{"Small", "Medium", "Large"}
+		for i in 0 ..< 3 {
+			draw_wizard_button(
+				l,
+				text_atlas,
+				staff_labels[i],
+				wl.btn_staff_size[i],
+				wiz.staff_size == utils.Staff_Size_Preset(i),
+				false,
+			)
+		}
+
+		draw_text(
+			l,
+			text_atlas,
+			"Page Size",
+			wl.btn_page_size[0].x,
+			wl.btn_page_size[0].y - 6.0,
+			12.0,
+			label_col,
+		)
+		page_labels := [3]string{"Letter", "A4", "Tabloid"}
+		for i in 0 ..< 3 {
+			draw_wizard_button(
+				l,
+				text_atlas,
+				page_labels[i],
+				wl.btn_page_size[i],
+				wiz.page_size == utils.Page_Size_Preset(i),
+				false,
+			)
+		}
+
+		draw_text(
+			l,
+			text_atlas,
+			"Orientation",
+			wl.btn_orient[0].x,
+			wl.btn_orient[0].y - 6.0,
+			12.0,
+			label_col,
+		)
+		draw_wizard_button(l, text_atlas, "Portrait", wl.btn_orient[0], !wiz.landscape, false)
+		draw_wizard_button(l, text_atlas, "Landscape", wl.btn_orient[1], wiz.landscape, false)
+
+		pr := wl.page_preview
+		draw_rect(l, pr.x, pr.y, pr.w, pr.h, {0.12, 0.13, 0.16, 1.0})
+		draw_rect_outline(l, pr.x, pr.y, pr.w, pr.h, 1.0, {0.26, 0.28, 0.33, 1.0})
+		sheet_w: f32 = wiz.landscape ? 132.0 : 96.0
+		sheet_h: f32 = wiz.landscape ? 96.0 : 128.0
+		sx := pr.x + (pr.w - sheet_w) * 0.5
+		sy := pr.y + (pr.h - sheet_h) * 0.5
+		draw_rect(l, sx + 3.0, sy + 4.0, sheet_w, sheet_h, {0.0, 0.0, 0.0, 0.35})
+		draw_rect(l, sx, sy, sheet_w, sheet_h, {0.97, 0.96, 0.93, 1.0})
+		for line_i in 0 ..< 3 {
+			ly := sy + 24.0 + f32(line_i) * 22.0
+			if ly + 6.0 < sy + sheet_h - 10.0 {
+				draw_rect(l, sx + 12.0, ly, sheet_w - 24.0, 1.0, {0.35, 0.35, 0.38, 1.0})
+				draw_rect(l, sx + 12.0, ly + 3.0, sheet_w - 24.0, 1.0, {0.35, 0.35, 0.38, 1.0})
+			}
+		}
+
+	case .Instruments:
+		draw_text(
+			l,
+			text_atlas,
+			"Ensemble Presets",
+			wl.btn_ensemble[0].x,
+			wl.btn_ensemble[0].y - 6.0,
+			12.0,
+			label_col,
+		)
+		ens_labels := [5]string {
+			"Solo Staff",
+			"Piano (Grand Staff)",
+			"Choir (SATB)",
+			"String Quartet",
+			"Brass Quintet",
+		}
+		for i in 0 ..< 5 {
+			draw_wizard_button(l, text_atlas, ens_labels[i], wl.btn_ensemble[i], false, false)
+		}
+
+		draw_text(
+			l,
+			text_atlas,
+			"Add Instrument",
+			wl.btn_add_part[0].x,
+			wl.btn_add_part[0].y - 6.0,
+			12.0,
+			label_col,
+		)
+		add_labels := [5]string{"+ Treble", "+ Bass", "+ Alto", "+ Tenor", "+ Grand Staff"}
+		for i in 0 ..< 5 {
+			draw_wizard_button(l, text_atlas, add_labels[i], wl.btn_add_part[i], false, false)
+		}
+
+		hdr_buf: [64]u8
+		hdr_str := fmt.bprintf(
+			hdr_buf[:],
+			"Score Order (%d/%d)",
+			len(wiz.parts),
+			utils.WIZ_MAX_PARTS,
+		)
+		draw_text(l, text_atlas, hdr_str, wl.part_list.x, wl.part_list.y - 6.0, 12.0, label_col)
+		draw_rect(
+			l,
+			wl.part_list.x,
+			wl.part_list.y,
+			wl.part_list.w,
+			wl.part_list.h,
+			{0.12, 0.13, 0.16, 1.0},
+		)
+		draw_rect_outline(
+			l,
+			wl.part_list.x,
+			wl.part_list.y,
+			wl.part_list.w,
+			wl.part_list.h,
+			1.0,
+			{0.26, 0.28, 0.33, 1.0},
+		)
+
+		for vis_i in 0 ..< utils.WIZ_VISIBLE_PART_ROWS {
+			p_idx := wiz.part_scroll + vis_i
+			if p_idx >= len(wiz.parts) {
+				break
+			}
+			rr := wl.part_rows[vis_i]
+			is_sel := p_idx == wiz.selected_part
+			if is_sel {
+				draw_rect(l, rr.x, rr.y, rr.w, rr.h, {0.22, 0.46, 0.82, 1.0})
+			}
+			wp := &wiz.parts[p_idx]
+			row_buf: [96]u8
+			tag := wp.is_grand ? "Grand" : utils.clef_to_string(wp.clef)
+			row_str := fmt.bprintf(
+				row_buf[:],
+				"%d. %s  [%s]",
+				p_idx + 1,
+				utils.text_buf_str(&wp.name),
+				tag,
+			)
+			rby := utils.text_baseline_in_rect(text_atlas, rr.y, rr.h, 12.0)
+			draw_text_clipped(
+				l,
+				text_atlas,
+				row_str,
+				rr.x + 8.0,
+				rby,
+				rr.w - 16.0,
+				12.0,
+				is_sel ? {0.99, 0.99, 1.0, 1.0} : {0.86, 0.88, 0.92, 1.0},
+			)
+		}
+
+		draw_wizard_button(l, text_atlas, "Move Up", wl.btn_part_up, false, false)
+		draw_wizard_button(l, text_atlas, "Move Down", wl.btn_part_down, false, false)
+		draw_wizard_button(l, text_atlas, "Remove", wl.btn_part_remove, false, false)
+
+		if wiz.selected_part >= 0 && wiz.selected_part < len(wiz.parts) {
+			sel_part := &wiz.parts[wiz.selected_part]
+			draw_wizard_text_input(
+				l,
+				text_atlas,
+				"Selected Part Name",
+				&sel_part.name,
+				wiz.focus == .Part_Name,
+				wiz.caret,
+				wiz.sel_anchor,
+				wl.field_part_name,
+			)
+			clef_labels := [5]string{"Treble", "Bass", "Alto", "Tenor", "Grand"}
+			for i in 0 ..< 5 {
+				is_act :=
+					(i == 4) ? sel_part.is_grand : (!sel_part.is_grand && sel_part.clef == utils.Clef(i))
+				draw_wizard_button(
+					l,
+					text_atlas,
+					clef_labels[i],
+					wl.btn_part_clef[i],
+					is_act,
+					false,
+				)
+			}
+		}
+
+	case .Time_And_Key:
+		draw_text(
+			l,
+			text_atlas,
+			"Time Signature",
+			wl.btn_ts_preset[0].x,
+			wl.btn_ts_preset[0].y - 6.0,
+			12.0,
+			label_col,
+		)
+		ts_presets := [6]utils.Rational{{4, 4}, {3, 4}, {2, 4}, {6, 8}, {2, 2}, {12, 8}}
+		ts_labels := [6]string{"4/4", "3/4", "2/4", "6/8", "2/2", "12/8"}
+		for ts, i in ts_presets {
+			draw_wizard_button(
+				l,
+				text_atlas,
+				ts_labels[i],
+				wl.btn_ts_preset[i],
+				wiz.time_sig == ts,
+				false,
+			)
+		}
+
+		num_by := utils.text_baseline_in_rect(
+			text_atlas,
+			wl.btn_ts_num_dec.y,
+			wl.btn_ts_num_dec.h,
+			12.0,
+		)
+		draw_text(l, text_atlas, "Beats:", wl.btn_ts_preset[0].x, num_by, 12.0, label_col)
+		draw_wizard_button(l, text_atlas, "-", wl.btn_ts_num_dec, false, false)
+		num_buf: [16]u8
+		draw_text_centered(
+			l,
+			text_atlas,
+			fmt.bprintf(num_buf[:], "%d", wiz.time_sig.num),
+			wl.ts_num_box,
+			13.0,
+			{0.96, 0.97, 0.99, 1.0},
+		)
+		draw_wizard_button(l, text_atlas, "+", wl.btn_ts_num_inc, false, false)
+
+		den_by := utils.text_baseline_in_rect(
+			text_atlas,
+			wl.btn_ts_den_dec.y,
+			wl.btn_ts_den_dec.h,
+			12.0,
+		)
+		draw_text(l, text_atlas, "Unit:", wl.btn_ts_preset[0].x, den_by, 12.0, label_col)
+		draw_wizard_button(l, text_atlas, "-", wl.btn_ts_den_dec, false, false)
+		den_buf: [16]u8
+		draw_text_centered(
+			l,
+			text_atlas,
+			fmt.bprintf(den_buf[:], "%d", wiz.time_sig.den),
+			wl.ts_den_box,
+			13.0,
+			{0.96, 0.97, 0.99, 1.0},
+		)
+		draw_wizard_button(l, text_atlas, "+", wl.btn_ts_den_inc, false, false)
+
+		tp := wl.ts_preview
+		draw_rect(l, tp.x, tp.y, tp.w, tp.h, {0.97, 0.96, 0.93, 1.0})
+		draw_rect_outline(l, tp.x, tp.y, tp.w, tp.h, 1.0, {0.30, 0.32, 0.36, 1.0})
+		p_space: f32 = 8.5
+		p_top_y := tp.y + (tp.h - 4.0 * p_space) * 0.5
+		for si in 0 ..< 5 {
+			draw_rect(
+				l,
+				tp.x + 8.0,
+				p_top_y + f32(si) * p_space,
+				tp.w - 16.0,
+				1.0,
+				{0.20, 0.20, 0.22, 1.0},
+			)
+		}
+		draw_time_sig(
+			l,
+			music_atlas,
+			wiz.time_sig,
+			tp.x + tp.w * 0.5 - 8.0,
+			p_top_y + 0.5,
+			p_space,
+			p_space * 4.0,
+			{0.08, 0.08, 0.08, 1.0},
+		)
+
+		draw_text(
+			l,
+			text_atlas,
+			"Initial Measures",
+			wl.btn_bars[0].x,
+			wl.btn_bars[0].y - 6.0,
+			12.0,
+			label_col,
+		)
+		bar_labels := [4]string{"-4", "-1", "+1", "+4"}
+		for i in 0 ..< 4 {
+			draw_wizard_button(l, text_atlas, bar_labels[i], wl.btn_bars[i], false, false)
+		}
+		draw_rect(
+			l,
+			wl.bars_box.x,
+			wl.bars_box.y,
+			wl.bars_box.w,
+			wl.bars_box.h,
+			{0.12, 0.13, 0.16, 1.0},
+		)
+		draw_rect_outline(
+			l,
+			wl.bars_box.x,
+			wl.bars_box.y,
+			wl.bars_box.w,
+			wl.bars_box.h,
+			1.0,
+			{0.28, 0.30, 0.35, 1.0},
+		)
+		mc_buf: [16]u8
+		draw_text_centered(
+			l,
+			text_atlas,
+			fmt.bprintf(mc_buf[:], "%d", wiz.measure_count),
+			wl.bars_box,
+			13.5,
+			{0.96, 0.97, 0.99, 1.0},
+		)
+
+		fill_label :=
+			wiz.fill_rests ? "[x] Fill Measures with Rests" : "[ ] Fill Measures with Rests"
+		draw_wizard_button(l, text_atlas, fill_label, wl.btn_fill_rests, wiz.fill_rests, false)
+
+		// Right column: Key Signature
+		draw_text(
+			l,
+			text_atlas,
+			"Key Signature",
+			wl.btn_key_mode[0].x,
+			wl.btn_key_mode[0].y - 6.0,
+			12.0,
+			label_col,
+		)
+		draw_wizard_button(l, text_atlas, "Major", wl.btn_key_mode[0], !wiz.is_minor, false)
+		draw_wizard_button(l, text_atlas, "Minor", wl.btn_key_mode[1], wiz.is_minor, false)
+
+		draw_wizard_button(l, text_atlas, "Flat (-)", wl.btn_key_flat, false, false)
+		draw_rect(
+			l,
+			wl.key_name_box.x,
+			wl.key_name_box.y,
+			wl.key_name_box.w,
+			wl.key_name_box.h,
+			{0.12, 0.13, 0.16, 1.0},
+		)
+		draw_rect_outline(
+			l,
+			wl.key_name_box.x,
+			wl.key_name_box.y,
+			wl.key_name_box.w,
+			wl.key_name_box.h,
+			1.0,
+			{0.28, 0.30, 0.35, 1.0},
+		)
+		draw_text_centered(
+			l,
+			text_atlas,
+			utils.key_sig_name(wiz.fifths, wiz.is_minor),
+			wl.key_name_box,
+			12.5,
+			{0.96, 0.97, 0.99, 1.0},
+		)
+		draw_wizard_button(l, text_atlas, "Sharp (+)", wl.btn_key_sharp, false, false)
+
+		kp := wl.ks_preview
+		draw_rect(l, kp.x, kp.y, kp.w, kp.h, {0.97, 0.96, 0.93, 1.0})
+		draw_rect_outline(l, kp.x, kp.y, kp.w, kp.h, 1.0, {0.30, 0.32, 0.36, 1.0})
+		preview_clef := utils.Clef.Treble
+		if len(wiz.parts) > 0 && !wiz.parts[0].is_grand {
+			preview_clef = wiz.parts[0].clef
+		}
+		k_space: f32 = 9.5
+		k_em := k_space * 4.0
+		k_staff_y := kp.y + (kp.h - 4.0 * k_space) * 0.5
+		k_ink := [4]f32{0.08, 0.08, 0.08, 1.0}
+		for si in 0 ..< 5 {
+			draw_rect(l, kp.x + 16.0, k_staff_y + f32(si) * k_space, kp.w - 32.0, 1.2, k_ink)
+		}
+		k_cur_x := kp.x + 24.0
+		draw_clef(l, music_atlas, preview_clef, k_cur_x, k_staff_y + 0.6, k_space, k_em, k_ink)
+		k_cur_x +=
+			utils.glyph_advance(music_atlas, utils.clef_glyph(preview_clef), k_em) + k_space * 0.9
+		if wiz.fifths != 0 {
+			draw_key_sig(
+				l,
+				music_atlas,
+				preview_clef,
+				wiz.fifths,
+				k_cur_x,
+				k_staff_y + 0.6,
+				k_space,
+				k_em,
+				k_ink,
+			)
+		}
+
+	case .Open_File:
+		fhdr_buf: [64]u8
+		fhdr_str := fmt.bprintf(fhdr_buf[:], "Found %d .toml %s", len(wiz.open_files), len(wiz.open_files) == 1 ? "file" : "files")
+		draw_text(l, text_atlas, fhdr_str, wl.file_list.x, wl.file_list.y - 6.0, 12.0, label_col)
+		draw_rect(
+			l,
+			wl.file_list.x,
+			wl.file_list.y,
+			wl.file_list.w,
+			wl.file_list.h,
+			{0.12, 0.13, 0.16, 1.0},
+		)
+		draw_rect_outline(
+			l,
+			wl.file_list.x,
+			wl.file_list.y,
+			wl.file_list.w,
+			wl.file_list.h,
+			1.0,
+			{0.26, 0.28, 0.33, 1.0},
+		)
+
+		if len(wiz.open_files) == 0 {
+			draw_text_centered(
+				l,
+				text_atlas,
+				"No .toml files found in the working directory.",
+				wl.file_list,
+				12.5,
+				{0.58, 0.61, 0.68, 1.0},
+			)
+		}
+		else {
+			for vis_i in 0 ..< utils.WIZ_VISIBLE_FILE_ROWS {
+				f_idx := wiz.file_scroll + vis_i
+				if f_idx >= len(wiz.open_files) {
+					break
+				}
+				rr := wl.file_rows[vis_i]
+				is_sel := f_idx == wiz.selected_file
+				if is_sel {
+					draw_rect(l, rr.x, rr.y, rr.w, rr.h, {0.22, 0.46, 0.82, 1.0})
+				}
+				rby := utils.text_baseline_in_rect(text_atlas, rr.y, rr.h, 12.5)
+				draw_text_clipped(
+					l,
+					text_atlas,
+					wiz.open_files[f_idx],
+					rr.x + 10.0,
+					rby,
+					rr.w - 20.0,
+					12.5,
+					is_sel ? {0.99, 0.99, 1.0, 1.0} : {0.86, 0.88, 0.92, 1.0},
+				)
+			}
+		}
+	}
+
+	if wiz.can_cancel {
+		draw_wizard_button(l, text_atlas, "Cancel", wl.btn_cancel, false, false)
+	}
+	if wiz.step == .Instruments || wiz.step == .Time_And_Key {
+		draw_wizard_button(l, text_atlas, "Back", wl.btn_back, false, false)
+	}
+	next_label := "Next"
+	next_primary := true
+	if wiz.step == .Time_And_Key {
+		next_label = "Finish"
+	}
+	else if wiz.step == .Open_File {
+		next_label = "Open"
+		next_primary = len(wiz.open_files) > 0
+	}
+	draw_wizard_button(l, text_atlas, next_label, wl.btn_next, false, next_primary)
 }
 
 renderer_init :: proc() -> (r: utils.Renderer, ok: bool) {
@@ -667,63 +1185,6 @@ draw_int :: proc(l: ^utils.Layer, value: int, x, y, pixel_size: f32, color: [4]f
 			}
 		}
 		cursor_x += 4.0 * pixel_size
-	}
-}
-
-draw_scene :: proc(
-	scene: ^utils.Scene,
-	s: ^utils.Score,
-	fonts: ^utils.Fonts,
-	cam: utils.Camera,
-	sel: utils.Selection,
-	tool: utils.Editor_Tool,
-	wiz: ^utils.Wizard_State,
-	panning: bool,
-) {
-	win_w := f32(scene.window.win_w)
-	win_h := f32(scene.window.win_h)
-	mouse := mouse_pos()
-	wiz_open := wiz != nil && wiz.active
-	inspecting := ctrl_held() && !wiz_open
-	layout := utils.compute_score_layout(s, &fonts.music)
-
-	scene_begin(scene, {0.22, 0.23, 0.25, 1.0})
-	draw_page(scene_layer(scene, utils.LAYER_PAGE), s.page, layout.page_count)
-	draw_score(scene_layer(scene, utils.LAYER_SCORE), s, fonts)
-
-	overlay := scene_layer(scene, utils.LAYER_OVERLAY)
-	draw_overlay(overlay, s, &fonts.music, sel)
-	if !wiz_open && tool.mode == .Note_Entry && !panning && !inspecting {
-		if mouse.y > utils.TOOLBAR_H && mouse.y < win_h - utils.STATUS_H {
-			world_mouse := utils.screen_to_world(cam, win_w, win_h, mouse)
-			draw_note_cursor(overlay, s, &fonts.music, tool, world_mouse)
-		}
-	}
-
-	draw_ui(scene_layer(scene, utils.LAYER_UI), s, fonts, tool, sel, win_w, win_h)
-
-	pushed_wizard := false
-	if wiz_open {
-		scene_push(scene, .Screen)
-		draw_wizard(scene_peek(scene), wiz, fonts, win_w, win_h)
-		pushed_wizard = true
-	}
-
-	pushed_inspector := false
-	if inspecting {
-		hovered := scene_hit_test(scene, cam, mouse)
-		scene_push(scene, .Screen)
-		draw_layer_badge(scene_peek(scene), hovered, mouse, win_w, win_h)
-		pushed_inspector = true
-	}
-
-	scene_end(scene, cam)
-
-	if pushed_inspector {
-		scene_pop(scene)
-	}
-	if pushed_wizard {
-		scene_pop(scene)
 	}
 }
 
@@ -1377,486 +1838,79 @@ draw_wizard_text_input :: proc(
 	}
 }
 
-draw_wizard :: proc(
-	l: ^utils.Layer,
-	wiz: ^utils.Wizard_State,
+draw_scene :: proc(
+	scene: ^utils.Scene,
+	s: ^utils.Score,
 	fonts: ^utils.Fonts,
-	win_w, win_h: f32,
+	cam: utils.Camera,
+	sel: utils.Selection,
+	tool: utils.Editor_Tool,
+	wiz: ^utils.Wizard_State,
+	drag: utils.Drag_State,
 ) {
-	music_atlas := &fonts.music
-	text_atlas := &fonts.text
-	wl := compute_wizard_layout(win_w, win_h)
-	c := wl.card
+	win_w := f32(scene.window.win_w)
+	win_h := f32(scene.window.win_h)
+	mouse := mouse_pos()
+	wiz_open := wiz != nil && wiz.active
+	inspecting := ctrl_held() && !wiz_open
+	layout := utils.compute_score_layout(s, &fonts.music)
 
-	draw_rect(l, 0, 0, win_w, win_h, {0.05, 0.06, 0.08, 0.72})
-	draw_rect(l, c.x + 6.0, c.y + 8.0, c.w, c.h, {0.0, 0.0, 0.0, 0.45})
-	draw_rect(l, c.x, c.y, c.w, c.h, {0.16, 0.17, 0.20, 1.0})
-	draw_rect(l, c.x, c.y, c.w, 44.0, {0.12, 0.13, 0.16, 1.0})
-	draw_rect(l, c.x, c.y + 44.0, c.w, 1.0, {0.26, 0.28, 0.33, 1.0})
-	draw_rect(l, c.x, c.y + c.h - 52.0, c.w, 1.0, {0.26, 0.28, 0.33, 1.0})
-	draw_rect_outline(l, c.x, c.y, c.w, c.h, 1.0, {0.32, 0.35, 0.42, 1.0})
+	scene_begin(scene, {0.22, 0.23, 0.25, 1.0})
+	draw_page(scene_layer(scene, utils.LAYER_PAGE), s.page, layout.page_count)
+	draw_score(scene_layer(scene, utils.LAYER_SCORE), s, fonts)
 
-	step_titles := [utils.Wizard_Step]string {
-		.Document     = "Document Setup Wizard  -  Step 1 of 3: Document & Page",
-		.Instruments  = "Document Setup Wizard  -  Step 2 of 3: Ensemble & Staves",
-		.Time_And_Key = "Document Setup Wizard  -  Step 3 of 3: Time, Key & Measures",
-	}
-	header_by := utils.text_baseline_in_rect(text_atlas, c.y, 44.0, 13.5)
-	draw_text(
-		l,
-		text_atlas,
-		step_titles[wiz.step],
-		c.x + 18.0,
-		header_by,
-		13.5,
-		{0.95, 0.96, 0.99, 1.0},
-	)
-
-	label_col := [4]f32{0.76, 0.79, 0.85, 1.0}
-
-
-	switch wiz.step {
-	case .Document:
-		draw_wizard_text_input(
-			l,
-			text_atlas,
-			"Title",
-			&wiz.title,
-			wiz.focus == .Title,
-			wiz.caret,
-			wiz.sel_anchor,
-			wl.field_title,
-		)
-		draw_wizard_text_input(
-			l,
-			text_atlas,
-			"Subtitle",
-			&wiz.subtitle,
-			wiz.focus == .Subtitle,
-			wiz.caret,
-			wiz.sel_anchor,
-			wl.field_subtitle,
-		)
-		draw_wizard_text_input(
-			l,
-			text_atlas,
-			"Composer",
-			&wiz.composer,
-			wiz.focus == .Composer,
-			wiz.caret,
-			wiz.sel_anchor,
-			wl.field_composer,
-		)
-
-		draw_text(
-			l,
-			text_atlas,
-			"Staff Size",
-			wl.btn_staff_size[0].x,
-			wl.btn_staff_size[0].y - 6.0,
-			12.0,
-			label_col,
-		)
-		staff_labels := [3]string{"Small", "Medium", "Large"}
-		for i in 0 ..< 3 {
-			draw_wizard_button(
-				l,
-				text_atlas,
-				staff_labels[i],
-				wl.btn_staff_size[i],
-				wiz.staff_size == utils.Staff_Size_Preset(i),
-				false,
-			)
-		}
-
-		draw_text(
-			l,
-			text_atlas,
-			"Page Size",
-			wl.btn_page_size[0].x,
-			wl.btn_page_size[0].y - 6.0,
-			12.0,
-			label_col,
-		)
-		page_labels := [3]string{"Letter", "A4", "Tabloid"}
-		for i in 0 ..< 3 {
-			draw_wizard_button(
-				l,
-				text_atlas,
-				page_labels[i],
-				wl.btn_page_size[i],
-				wiz.page_size == utils.Page_Size_Preset(i),
-				false,
-			)
-		}
-
-		draw_text(
-			l,
-			text_atlas,
-			"Orientation",
-			wl.btn_orient[0].x,
-			wl.btn_orient[0].y - 6.0,
-			12.0,
-			label_col,
-		)
-		draw_wizard_button(l, text_atlas, "Portrait", wl.btn_orient[0], !wiz.landscape, false)
-		draw_wizard_button(l, text_atlas, "Landscape", wl.btn_orient[1], wiz.landscape, false)
-
-		pr := wl.page_preview
-		draw_rect(l, pr.x, pr.y, pr.w, pr.h, {0.12, 0.13, 0.16, 1.0})
-		draw_rect_outline(l, pr.x, pr.y, pr.w, pr.h, 1.0, {0.26, 0.28, 0.33, 1.0})
-		sheet_w: f32 = wiz.landscape ? 132.0 : 96.0
-		sheet_h: f32 = wiz.landscape ? 96.0 : 128.0
-		sx := pr.x + (pr.w - sheet_w) * 0.5
-		sy := pr.y + (pr.h - sheet_h) * 0.5
-		draw_rect(l, sx + 3.0, sy + 4.0, sheet_w, sheet_h, {0.0, 0.0, 0.0, 0.35})
-		draw_rect(l, sx, sy, sheet_w, sheet_h, {0.97, 0.96, 0.93, 1.0})
-		for line_i in 0 ..< 3 {
-			ly := sy + 24.0 + f32(line_i) * 22.0
-			if ly + 6.0 < sy + sheet_h - 10.0 {
-				draw_rect(l, sx + 12.0, ly, sheet_w - 24.0, 1.0, {0.35, 0.35, 0.38, 1.0})
-				draw_rect(l, sx + 12.0, ly + 3.0, sheet_w - 24.0, 1.0, {0.35, 0.35, 0.38, 1.0})
-			}
-		}
-
-	case .Instruments:
-		draw_text(
-			l,
-			text_atlas,
-			"Ensemble Presets",
-			wl.btn_ensemble[0].x,
-			wl.btn_ensemble[0].y - 6.0,
-			12.0,
-			label_col,
-		)
-		ens_labels := [5]string {
-			"Solo Staff",
-			"Piano (Grand Staff)",
-			"Choir (SATB)",
-			"String Quartet",
-			"Brass Quintet",
-		}
-		for i in 0 ..< 5 {
-			draw_wizard_button(l, text_atlas, ens_labels[i], wl.btn_ensemble[i], false, false)
-		}
-
-		draw_text(
-			l,
-			text_atlas,
-			"Add Instrument",
-			wl.btn_add_part[0].x,
-			wl.btn_add_part[0].y - 6.0,
-			12.0,
-			label_col,
-		)
-		add_labels := [5]string{"+ Treble", "+ Bass", "+ Alto", "+ Tenor", "+ Grand Staff"}
-		for i in 0 ..< 5 {
-			draw_wizard_button(l, text_atlas, add_labels[i], wl.btn_add_part[i], false, false)
-		}
-
-		hdr_buf: [64]u8
-		hdr_str := fmt.bprintf(
-			hdr_buf[:],
-			"Score Order (%d/%d)",
-			len(wiz.parts),
-			utils.WIZ_MAX_PARTS,
-		)
-		draw_text(l, text_atlas, hdr_str, wl.part_list.x, wl.part_list.y - 6.0, 12.0, label_col)
-		draw_rect(
-			l,
-			wl.part_list.x,
-			wl.part_list.y,
-			wl.part_list.w,
-			wl.part_list.h,
-			{0.12, 0.13, 0.16, 1.0},
-		)
-		draw_rect_outline(
-			l,
-			wl.part_list.x,
-			wl.part_list.y,
-			wl.part_list.w,
-			wl.part_list.h,
-			1.0,
-			{0.26, 0.28, 0.33, 1.0},
-		)
-
-		for vis_i in 0 ..< utils.WIZ_VISIBLE_PART_ROWS {
-			p_idx := wiz.part_scroll + vis_i
-			if p_idx >= len(wiz.parts) {
-				break
-			}
-			rr := wl.part_rows[vis_i]
-			is_sel := p_idx == wiz.selected_part
-			if is_sel {
-				draw_rect(l, rr.x, rr.y, rr.w, rr.h, {0.22, 0.46, 0.82, 1.0})
-			}
-			wp := &wiz.parts[p_idx]
-			row_buf: [96]u8
-			tag := wp.is_grand ? "Grand" : utils.clef_to_string(wp.clef)
-			row_str := fmt.bprintf(
-				row_buf[:],
-				"%d. %s  [%s]",
-				p_idx + 1,
-				utils.text_buf_str(&wp.name),
-				tag,
-			)
-			rby := utils.text_baseline_in_rect(text_atlas, rr.y, rr.h, 12.0)
-			draw_text_clipped(
-				l,
-				text_atlas,
-				row_str,
-				rr.x + 8.0,
-				rby,
-				rr.w - 16.0,
-				12.0,
-				is_sel ? {0.99, 0.99, 1.0, 1.0} : {0.86, 0.88, 0.92, 1.0},
-			)
-		}
-
-		draw_wizard_button(l, text_atlas, "Move Up", wl.btn_part_up, false, false)
-		draw_wizard_button(l, text_atlas, "Move Down", wl.btn_part_down, false, false)
-		draw_wizard_button(l, text_atlas, "Remove", wl.btn_part_remove, false, false)
-
-		if wiz.selected_part >= 0 && wiz.selected_part < len(wiz.parts) {
-			sel_part := &wiz.parts[wiz.selected_part]
-			draw_wizard_text_input(
-				l,
-				text_atlas,
-				"Selected Part Name",
-				&sel_part.name,
-				wiz.focus == .Part_Name,
-				wiz.caret,
-				wiz.sel_anchor,
-				wl.field_part_name,
-			)
-			clef_labels := [5]string{"Treble", "Bass", "Alto", "Tenor", "Grand"}
-			for i in 0 ..< 5 {
-				is_act :=
-					(i == 4) ? sel_part.is_grand : (!sel_part.is_grand && sel_part.clef == utils.Clef(i))
-				draw_wizard_button(
-					l,
-					text_atlas,
-					clef_labels[i],
-					wl.btn_part_clef[i],
-					is_act,
-					false,
-				)
-			}
-		}
-
-	case .Time_And_Key:
-		draw_text(
-			l,
-			text_atlas,
-			"Time Signature",
-			wl.btn_ts_preset[0].x,
-			wl.btn_ts_preset[0].y - 6.0,
-			12.0,
-			label_col,
-		)
-		ts_presets := [6]utils.Rational{{4, 4}, {3, 4}, {2, 4}, {6, 8}, {2, 2}, {12, 8}}
-		ts_labels := [6]string{"4/4", "3/4", "2/4", "6/8", "2/2", "12/8"}
-		for ts, i in ts_presets {
-			draw_wizard_button(
-				l,
-				text_atlas,
-				ts_labels[i],
-				wl.btn_ts_preset[i],
-				wiz.time_sig == ts,
-				false,
-			)
-		}
-
-		num_by := utils.text_baseline_in_rect(
-			text_atlas,
-			wl.btn_ts_num_dec.y,
-			wl.btn_ts_num_dec.h,
-			12.0,
-		)
-		draw_text(l, text_atlas, "Beats:", wl.btn_ts_preset[0].x, num_by, 12.0, label_col)
-		draw_wizard_button(l, text_atlas, "-", wl.btn_ts_num_dec, false, false)
-		num_buf: [16]u8
-		draw_text_centered(
-			l,
-			text_atlas,
-			fmt.bprintf(num_buf[:], "%d", wiz.time_sig.num),
-			wl.ts_num_box,
-			13.0,
-			{0.96, 0.97, 0.99, 1.0},
-		)
-		draw_wizard_button(l, text_atlas, "+", wl.btn_ts_num_inc, false, false)
-
-		den_by := utils.text_baseline_in_rect(
-			text_atlas,
-			wl.btn_ts_den_dec.y,
-			wl.btn_ts_den_dec.h,
-			12.0,
-		)
-		draw_text(l, text_atlas, "Unit:", wl.btn_ts_preset[0].x, den_by, 12.0, label_col)
-		draw_wizard_button(l, text_atlas, "-", wl.btn_ts_den_dec, false, false)
-		den_buf: [16]u8
-		draw_text_centered(
-			l,
-			text_atlas,
-			fmt.bprintf(den_buf[:], "%d", wiz.time_sig.den),
-			wl.ts_den_box,
-			13.0,
-			{0.96, 0.97, 0.99, 1.0},
-		)
-		draw_wizard_button(l, text_atlas, "+", wl.btn_ts_den_inc, false, false)
-
-		tp := wl.ts_preview
-		draw_rect(l, tp.x, tp.y, tp.w, tp.h, {0.97, 0.96, 0.93, 1.0})
-		draw_rect_outline(l, tp.x, tp.y, tp.w, tp.h, 1.0, {0.30, 0.32, 0.36, 1.0})
-		p_space: f32 = 8.5
-		p_top_y := tp.y + (tp.h - 4.0 * p_space) * 0.5
-		for si in 0 ..< 5 {
-			draw_rect(
-				l,
-				tp.x + 8.0,
-				p_top_y + f32(si) * p_space,
-				tp.w - 16.0,
-				1.0,
-				{0.20, 0.20, 0.22, 1.0},
-			)
-		}
-		draw_time_sig(
-			l,
-			music_atlas,
-			wiz.time_sig,
-			tp.x + tp.w * 0.5 - 8.0,
-			p_top_y + 0.5,
-			p_space,
-			p_space * 4.0,
-			{0.08, 0.08, 0.08, 1.0},
-		)
-
-		draw_text(
-			l,
-			text_atlas,
-			"Initial Measures",
-			wl.btn_bars[0].x,
-			wl.btn_bars[0].y - 6.0,
-			12.0,
-			label_col,
-		)
-		bar_labels := [4]string{"-4", "-1", "+1", "+4"}
-		for i in 0 ..< 4 {
-			draw_wizard_button(l, text_atlas, bar_labels[i], wl.btn_bars[i], false, false)
-		}
-		draw_rect(
-			l,
-			wl.bars_box.x,
-			wl.bars_box.y,
-			wl.bars_box.w,
-			wl.bars_box.h,
-			{0.12, 0.13, 0.16, 1.0},
-		)
-		draw_rect_outline(
-			l,
-			wl.bars_box.x,
-			wl.bars_box.y,
-			wl.bars_box.w,
-			wl.bars_box.h,
-			1.0,
-			{0.28, 0.30, 0.35, 1.0},
-		)
-		mc_buf: [16]u8
-		draw_text_centered(
-			l,
-			text_atlas,
-			fmt.bprintf(mc_buf[:], "%d", wiz.measure_count),
-			wl.bars_box,
-			13.5,
-			{0.96, 0.97, 0.99, 1.0},
-		)
-
-		fill_label :=
-			wiz.fill_rests ? "[x] Fill Measures with Rests" : "[ ] Fill Measures with Rests"
-		draw_wizard_button(l, text_atlas, fill_label, wl.btn_fill_rests, wiz.fill_rests, false)
-
-		// Right column: Key Signature
-		draw_text(
-			l,
-			text_atlas,
-			"Key Signature",
-			wl.btn_key_mode[0].x,
-			wl.btn_key_mode[0].y - 6.0,
-			12.0,
-			label_col,
-		)
-		draw_wizard_button(l, text_atlas, "Major", wl.btn_key_mode[0], !wiz.is_minor, false)
-		draw_wizard_button(l, text_atlas, "Minor", wl.btn_key_mode[1], wiz.is_minor, false)
-
-		draw_wizard_button(l, text_atlas, "Flat (-)", wl.btn_key_flat, false, false)
-		draw_rect(
-			l,
-			wl.key_name_box.x,
-			wl.key_name_box.y,
-			wl.key_name_box.w,
-			wl.key_name_box.h,
-			{0.12, 0.13, 0.16, 1.0},
-		)
-		draw_rect_outline(
-			l,
-			wl.key_name_box.x,
-			wl.key_name_box.y,
-			wl.key_name_box.w,
-			wl.key_name_box.h,
-			1.0,
-			{0.28, 0.30, 0.35, 1.0},
-		)
-		draw_text_centered(
-			l,
-			text_atlas,
-			utils.key_sig_name(wiz.fifths, wiz.is_minor),
-			wl.key_name_box,
-			12.5,
-			{0.96, 0.97, 0.99, 1.0},
-		)
-		draw_wizard_button(l, text_atlas, "Sharp (+)", wl.btn_key_sharp, false, false)
-
-		kp := wl.ks_preview
-		draw_rect(l, kp.x, kp.y, kp.w, kp.h, {0.97, 0.96, 0.93, 1.0})
-		draw_rect_outline(l, kp.x, kp.y, kp.w, kp.h, 1.0, {0.30, 0.32, 0.36, 1.0})
-		preview_clef := utils.Clef.Treble
-		if len(wiz.parts) > 0 && !wiz.parts[0].is_grand {
-			preview_clef = wiz.parts[0].clef
-		}
-		k_space: f32 = 9.5
-		k_em := k_space * 4.0
-		k_staff_y := kp.y + (kp.h - 4.0 * k_space) * 0.5
-		k_ink := [4]f32{0.08, 0.08, 0.08, 1.0}
-		for si in 0 ..< 5 {
-			draw_rect(l, kp.x + 16.0, k_staff_y + f32(si) * k_space, kp.w - 32.0, 1.2, k_ink)
-		}
-		k_cur_x := kp.x + 24.0
-		draw_clef(l, music_atlas, preview_clef, k_cur_x, k_staff_y + 0.6, k_space, k_em, k_ink)
-		k_cur_x +=
-			utils.glyph_advance(music_atlas, utils.clef_glyph(preview_clef), k_em) + k_space * 0.9
-		if wiz.fifths != 0 {
-			draw_key_sig(
-				l,
-				music_atlas,
-				preview_clef,
-				wiz.fifths,
-				k_cur_x,
-				k_staff_y + 0.6,
-				k_space,
-				k_em,
-				k_ink,
-			)
+	overlay := scene_layer(scene, utils.LAYER_OVERLAY)
+	draw_overlay(overlay, s, &fonts.music, sel)
+	if !wiz_open && tool.mode == .Note_Entry && !drag.panning && !inspecting {
+		if mouse.y > utils.TOOLBAR_H && mouse.y < win_h - utils.STATUS_H {
+			world_mouse := utils.screen_to_world(cam, win_w, win_h, mouse)
+			draw_note_cursor(overlay, s, &fonts.music, tool, world_mouse)
 		}
 	}
 
-	if wiz.can_cancel {
-		draw_wizard_button(l, text_atlas, "Cancel", wl.btn_cancel, false, false)
+	ui_layer := scene_layer(scene, utils.LAYER_UI)
+	if !wiz_open && drag.marquee {
+		draw_marquee(ui_layer, drag)
 	}
-	if wiz.step != .Document {
-		draw_wizard_button(l, text_atlas, "Back", wl.btn_back, false, false)
+	draw_ui(ui_layer, s, fonts, tool, sel, win_w, win_h)
+
+	pushed_wizard := false
+	if wiz_open {
+		scene_push(scene, .Screen)
+		draw_wizard(scene_peek(scene), wiz, fonts, win_w, win_h)
+		pushed_wizard = true
 	}
-	next_label := wiz.step == .Time_And_Key ? "Finish" : "Next"
-	draw_wizard_button(l, text_atlas, next_label, wl.btn_next, false, true)
+
+	pushed_inspector := false
+	if inspecting {
+		hovered := scene_hit_test(scene, cam, mouse)
+		scene_push(scene, .Screen)
+		draw_layer_badge(scene_peek(scene), hovered, mouse, win_w, win_h)
+		pushed_inspector = true
+	}
+
+	scene_end(scene, cam)
+
+	if pushed_inspector {
+		scene_pop(scene)
+	}
+	if pushed_wizard {
+		scene_pop(scene)
+	}
+}
+
+draw_marquee :: proc(l: ^utils.Layer, drag: utils.Drag_State) {
+	x0 := f32(min(drag.press_pos.x, drag.cur_pos.x))
+	y0 := f32(min(drag.press_pos.y, drag.cur_pos.y))
+	x1 := f32(max(drag.press_pos.x, drag.cur_pos.x))
+	y1 := f32(max(drag.press_pos.y, drag.cur_pos.y))
+	w := x1 - x0
+	h := y1 - y0
+	if w <= 0.0 || h <= 0.0 {
+		return
+	}
+	draw_rect(l, x0, y0, w, h, {0.22, 0.54, 0.96, 0.14})
+	draw_rect_outline(l, x0, y0, w, h, 1.0, {0.28, 0.60, 1.0, 0.85})
 }
 
 draw_overlay :: proc(
@@ -1917,37 +1971,29 @@ draw_overlay :: proc(
 	if !sel.active {
 		return
 	}
-	if sel.part_idx < 0 || sel.part_idx >= len(s.parts) {
-		return
-	}
-	part := &s.parts[sel.part_idx]
-	if sel.staff_idx < 0 || sel.staff_idx >= len(part.staves) {
-		return
-	}
-	if sel.measure_idx < 0 || sel.measure_idx >= len(part.staves[sel.staff_idx].measures) {
-		return
-	}
-	sys, sys_ok := utils.find_system_for_measure(&layout, sel.measure_idx)
-	if !sys_ok {
-		return
-	}
 
-	flat_staff_idx := 0
-	for p_i in 0 ..< sel.part_idx {
-		flat_staff_idx += len(s.parts[p_i].staves)
+	staves := utils.total_staff_count(s)
+	if staves <= 0 || layout.total_measures <= 0 {
+		return
 	}
-	flat_staff_idx += sel.staff_idx
+	s_lo := clamp(sel.start_staff, 0, staves - 1)
+	s_hi := clamp(sel.end_staff, s_lo, staves - 1)
+	m_lo := clamp(sel.start_measure, 0, layout.total_measures - 1)
+	m_hi := clamp(sel.end_measure, m_lo, layout.total_measures - 1)
 
-	x := sys.music_x0 + f32(sel.measure_idx - sys.start_measure) * sys.measure_w
-	y := sys.y + f32(flat_staff_idx) * layout.staff_step_y
-	draw_rect(
-		l,
-		x,
-		y - 4.0,
-		sys.measure_w,
-		layout.staff_h + 8.0,
-		{0.20, 0.50, 0.95, 0.22},
-	)
+	for sys_idx in 0 ..< layout.system_count {
+		sys := layout.systems[sys_idx]
+		ov_lo := max(sys.start_measure, m_lo)
+		ov_hi := min(sys.end_measure - 1, m_hi)
+		if ov_lo > ov_hi {
+			continue
+		}
+		x := sys.music_x0 + f32(ov_lo - sys.start_measure) * sys.measure_w
+		w := f32(ov_hi - ov_lo + 1) * sys.measure_w
+		y0 := sys.y + f32(s_lo) * layout.staff_step_y - 4.0
+		y1 := sys.y + f32(s_hi) * layout.staff_step_y + layout.staff_h + 4.0
+		draw_rect(l, x, y0, w, y1 - y0, {0.20, 0.50, 0.95, 0.22})
+	}
 }
 
 draw_ui :: proc(
@@ -2082,9 +2128,9 @@ draw_ui :: proc(
 	can_pull := false
 	sys_locked := false
 	if sel.active {
-		if sys, ok := utils.find_system_for_measure(&layout, sel.measure_idx); ok {
-			can_push = sel.measure_idx > sys.start_measure
-			can_pull = sel.measure_idx > 0 && sel.measure_idx == sys.start_measure
+		if sys, ok := utils.find_system_for_measure(&layout, sel.start_measure); ok {
+			can_push = sel.start_measure > sys.start_measure
+			can_pull = sel.start_measure > 0 && sel.start_measure == sys.start_measure
 			sys_locked = utils.is_system_locked(s, sys, layout.total_measures)
 		}
 	}
@@ -2137,22 +2183,40 @@ draw_ui :: proc(
 	status_buf: [192]u8
 	mode_str := tool.mode == .Select ? "Select" : "Note Entry"
 	status_str: string
-	if sel.active && sel.part_idx < len(s.parts) {
+	if sel.active {
 		lock_str := sys_locked ? " [Locked]" : ""
-		status_str = fmt.bprintf(
-			status_buf[:],
-			"%s  |  Bar %d/%d (%s)%s  |  Down/Up: Move Line  |  L/U: Lock/Unlock",
-			mode_str,
-			sel.measure_idx + 1,
-			total_bars,
-			s.parts[sel.part_idx].name,
-			lock_str,
-		)
+		if sel.start_measure == sel.end_measure && sel.start_staff == sel.end_staff {
+			p_idx, _, p_ok := utils.staff_at_flat_index(s, sel.start_staff)
+			part_name := p_ok ? s.parts[p_idx].name : ""
+			status_str = fmt.bprintf(
+				status_buf[:],
+				"%s  |  Bar %d/%d (%s)%s  |  Del: Clear  |  Down/Up: Move Line  |  L/U: Lock/Unlock",
+				mode_str,
+				sel.start_measure + 1,
+				total_bars,
+				part_name,
+				lock_str,
+			)
+		}
+		else {
+			staff_cnt := sel.end_staff - sel.start_staff + 1
+			status_str = fmt.bprintf(
+				status_buf[:],
+				"%s  |  Bars %d-%d/%d (%d %s)%s  |  Del: Clear  |  Ctrl+Del: Remove Bars",
+				mode_str,
+				sel.start_measure + 1,
+				sel.end_measure + 1,
+				total_bars,
+				staff_cnt,
+				staff_cnt == 1 ? "staff" : "staves",
+				lock_str,
+			)
+		}
 	}
 	else {
 		status_str = fmt.bprintf(
 			status_buf[:],
-			"%s  |  %d Bars, %d Pages  |  Ctrl+N: Wizard  |  Ctrl+=/Ctrl+-: Add/Del Bar",
+			"%s  |  %d Bars, %d Pages  |  Drag or Ctrl+A: Select  |  Ctrl+N: Wizard",
 			mode_str,
 			total_bars,
 			layout.page_count,

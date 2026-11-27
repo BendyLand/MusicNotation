@@ -1,5 +1,6 @@
 package main
 
+import "core:os"
 import "score"
 import "utils"
 import win "window"
@@ -9,7 +10,11 @@ main :: proc() {
 	defer track_leaks_finish()
 	wiz: utils.Wizard_State
 	defer utils.wizard_destroy(&wiz)
-	s, loaded := score.load(utils.SCORE_PATH)
+	s: utils.Score
+	loaded := false
+	if len(os.args) > 1 {
+		s, loaded = score.load(os.args[1])
+	}
 	if !loaded {
 		s = score.make_demo()
 		utils.wizard_init(&wiz, false)
@@ -43,8 +48,56 @@ main :: proc() {
 	drag := utils.Drag_State{}
 	running := true
 	win.set_text_input(&w, wiz.active && wiz.focus != .None)
-	win.draw_scene(&scene, &s, &fonts, cam, sel, tool, &wiz, drag.panning)
+	win.draw_scene(&scene, &s, &fonts, cam, sel, tool, &wiz, drag)
 	main_loop(&cam, &scene, &s, &fonts, &sel, &tool, &drag, &wiz, &running)
+}
+
+add_measure_action :: proc(s: ^utils.Score, sel: ^utils.Selection) -> bool {
+	target_idx := sel.active ? sel.end_measure + 1 : utils.measure_count(s)
+	if !score.insert_measure(s, target_idx) {
+		return false
+	}
+	if sel.active {
+		sel.start_measure = target_idx
+		sel.end_measure = target_idx
+	}
+	score.save_score(s)
+	return true
+}
+
+remove_measure_action :: proc(s: ^utils.Score, sel: ^utils.Selection) -> bool {
+	total := utils.measure_count(s)
+	if total <= 1 {
+		return false
+	}
+	if !sel.active {
+		if !score.remove_measure(s, total - 1) {
+			return false
+		}
+		score.save_score(s)
+		return true
+	}
+
+	m_lo := clamp(sel.start_measure, 0, total - 1)
+	m_hi := clamp(sel.end_measure, m_lo, total - 1)
+	removed_any := false
+	for m := m_hi; m >= m_lo; m -= 1 {
+		if utils.measure_count(s) <= 1 {
+			break
+		}
+		if score.remove_measure(s, m) {
+			removed_any = true
+		}
+	}
+	if !removed_any {
+		return false
+	}
+	new_total := utils.measure_count(s)
+	clamped := clamp(m_lo, 0, max(0, new_total - 1))
+	sel.start_measure = clamped
+	sel.end_measure = clamped
+	score.save_score(s)
+	return true
 }
 
 main_loop :: proc(
@@ -82,6 +135,10 @@ main_loop :: proc(
 			case utils.Event_Key_Down:
 				if e.ctrl {
 					#partial switch e.key {
+					case .A:
+						tool.mode = .Select
+						sel^ = utils.select_all_measures(s)
+						needs_redraw = true
 					case .N:
 						drag^ = {}
 						utils.wizard_init(wiz, true)
@@ -91,11 +148,11 @@ main_loop :: proc(
 					case .E, .P:
 						score.export_score_pdf(s, fonts)
 					case .Equals:
-						if score.add_measure_action(s, sel) {
+						if add_measure_action(s, sel) {
 							needs_redraw = true
 						}
 					case .Minus, .Backspace, .Delete:
-						if score.remove_measure_action(s, sel) {
+						if remove_measure_action(s, sel) {
 							needs_redraw = true
 						}
 					}
@@ -126,7 +183,7 @@ main_loop :: proc(
 				case .Down:
 					if tool.mode == .Select && sel.active {
 						layout := utils.compute_score_layout(s, &fonts.music)
-						if score.push_measure_next_line(s, &layout, sel.measure_idx) {
+						if score.push_measure_next_line(s, &layout, sel.start_measure) {
 							score.save_score(s)
 							needs_redraw = true
 						}
@@ -134,7 +191,7 @@ main_loop :: proc(
 				case .Up:
 					if tool.mode == .Select && sel.active {
 						layout := utils.compute_score_layout(s, &fonts.music)
-						if score.pull_measure_prev_line(s, &layout, sel.measure_idx) {
+						if score.pull_measure_prev_line(s, &layout, sel.start_measure) {
 							score.save_score(s)
 							needs_redraw = true
 						}
@@ -142,7 +199,7 @@ main_loop :: proc(
 				case .L:
 					if tool.mode == .Select && sel.active {
 						layout := utils.compute_score_layout(s, &fonts.music)
-						if score.lock_system(s, &layout, sel.measure_idx) {
+						if score.lock_system(s, &layout, sel.start_measure) {
 							score.save_score(s)
 							needs_redraw = true
 						}
@@ -150,17 +207,17 @@ main_loop :: proc(
 				case .U:
 					if tool.mode == .Select && sel.active {
 						layout := utils.compute_score_layout(s, &fonts.music)
-						if score.unlock_system(s, &layout, sel.measure_idx) {
+						if score.unlock_system(s, &layout, sel.start_measure) {
 							score.save_score(s)
 							needs_redraw = true
 						}
 					}
 				case .Backspace, .Delete:
 					if tool.mode == .Select && sel.active {
-						sm := &s.parts[sel.part_idx].staves[sel.staff_idx].measures[sel.measure_idx]
-						score.clear_measure(sm)
-						score.save_score(s)
-						needs_redraw = true
+						if score.clear_selection(s, sel^) {
+							score.save_score(s)
+							needs_redraw = true
+						}
 					}
 					else if tool.mode == .Note_Entry {
 						mouse := win.mouse_pos()
@@ -249,17 +306,17 @@ main_loop :: proc(
 							}
 							needs_redraw = true
 						case .Add_Measure:
-							if score.add_measure_action(s, sel) {
+							if add_measure_action(s, sel) {
 								needs_redraw = true
 							}
 						case .Remove_Measure:
-							if score.remove_measure_action(s, sel) {
+							if remove_measure_action(s, sel) {
 								needs_redraw = true
 							}
 						case .Push_Measure_Down:
 							if sel.active {
 								layout := utils.compute_score_layout(s, &fonts.music)
-								if score.push_measure_next_line(s, &layout, sel.measure_idx) {
+								if score.push_measure_next_line(s, &layout, sel.start_measure) {
 									score.save_score(s)
 									needs_redraw = true
 								}
@@ -267,7 +324,7 @@ main_loop :: proc(
 						case .Pull_Measure_Up:
 							if sel.active {
 								layout := utils.compute_score_layout(s, &fonts.music)
-								if score.pull_measure_prev_line(s, &layout, sel.measure_idx) {
+								if score.pull_measure_prev_line(s, &layout, sel.start_measure) {
 									score.save_score(s)
 									needs_redraw = true
 								}
@@ -275,7 +332,7 @@ main_loop :: proc(
 						case .Toggle_System_Lock:
 							if sel.active {
 								layout := utils.compute_score_layout(s, &fonts.music)
-								if score.toggle_system_lock(s, &layout, sel.measure_idx) {
+								if score.toggle_system_lock(s, &layout, sel.start_measure) {
 									score.save_score(s)
 									needs_redraw = true
 								}
@@ -288,6 +345,7 @@ main_loop :: proc(
 						world := utils.screen_to_world(cam^, win_w, win_h, {mx, my})
 						if tool.mode == .Select {
 							drag.left_down = true
+							drag.marquee = false
 							drag.press_pos = {e.x, e.y}
 							drag.cur_pos = {e.x, e.y}
 							next_sel := utils.hit_test_measure(s, &fonts.music, world)
@@ -310,7 +368,11 @@ main_loop :: proc(
 					needs_redraw = true
 				}
 				else if e.button == .Left {
+					if drag.marquee {
+						needs_redraw = true
+					}
 					drag.left_down = false
+					drag.marquee = false
 				}
 			case utils.Event_Mouse_Move:
 				if drag.panning {
@@ -319,8 +381,35 @@ main_loop :: proc(
 					needs_redraw = true
 				}
 				else {
-					if drag.left_down {
+					if drag.left_down && tool.mode == .Select {
 						drag.cur_pos = {e.x, e.y}
+						dx := abs(drag.cur_pos.x - drag.press_pos.x)
+						dy := abs(drag.cur_pos.y - drag.press_pos.y)
+						if !drag.marquee && (dx > 4 || dy > 4) {
+							drag.marquee = true
+						}
+						if drag.marquee {
+							p0 := utils.screen_to_world(
+								cam^,
+								win_w,
+								win_h,
+								{f32(drag.press_pos.x), f32(drag.press_pos.y)},
+							)
+							p1 := utils.screen_to_world(
+								cam^,
+								win_w,
+								win_h,
+								{f32(drag.cur_pos.x), f32(drag.cur_pos.y)},
+							)
+							world_r := utils.Rect {
+								x = min(p0.x, p1.x),
+								y = min(p0.y, p1.y),
+								w = abs(p1.x - p0.x),
+								h = abs(p1.y - p0.y),
+							}
+							sel^ = utils.select_measures_in_rect(s, &fonts.music, world_r)
+							needs_redraw = true
+						}
 					}
 					if tool.mode == .Note_Entry || win.ctrl_held() {
 						needs_redraw = true
@@ -337,11 +426,15 @@ main_loop :: proc(
 		win.set_text_input(scene.window, wiz.active && wiz.focus != .None)
 		mouse := win.mouse_pos()
 		in_canvas := mouse.y > utils.TOOLBAR_H && mouse.y < win_h - utils.STATUS_H
-		hide_os_cursor := !wiz.active && tool.mode == .Note_Entry && in_canvas && !drag.panning && !win.ctrl_held()
+		hide_os_cursor :=
+			!wiz.active &&
+			tool.mode == .Note_Entry &&
+			in_canvas &&
+			!drag.panning &&
+			!win.ctrl_held()
 		win.set_cursor_visible(!hide_os_cursor)
 		if running^ && needs_redraw {
-			win.draw_scene(scene, s, fonts, cam^, sel^, tool^, wiz, drag.panning)
+			win.draw_scene(scene, s, fonts, cam^, sel^, tool^, wiz, drag^)
 		}
 	}
 }
-

@@ -8,7 +8,10 @@ MIN_WIDTH     :: 320
 MIN_HEIGHT    :: 240
 TARGET_WIDTH  :: 800
 TARGET_HEIGHT :: 900
+WIZ_CARD_W :: f32(640.0)
+WIZ_CARD_H :: f32(480.0)
 
+WIZ_VISIBLE_FILE_ROWS   :: 9
 DEFAULT_BARS_PER_SYSTEM :: 4
 MAX_SYSTEMS             :: 64
 MAX_LAYERS              :: 32
@@ -259,31 +262,34 @@ Page_Setup :: struct {
 }
 
 Score :: struct {
-	version:  int,
-	title:    string,
-	subtitle: string,
-	composer: string,
-	page:     Page_Setup,
-	parts:    [dynamic]Part,
-	breaks:   [dynamic]Measure_Break,
+	version:   int,
+	file_path: string,
+	title:     string,
+	subtitle:  string,
+	composer:  string,
+	page:      Page_Setup,
+	parts:     [dynamic]Part,
+	breaks:    [dynamic]Measure_Break,
 }
 
 Bar_Accidental_State :: struct {
 	active: [11][Step]i8,
 }
 
+Selection :: struct {
+	active:        bool,
+	start_staff:   int, // flat staff index across all parts (inclusive)
+	end_staff:     int, // inclusive
+	start_measure: int, // inclusive
+	end_measure:   int, // inclusive
+}
+
 Drag_State :: struct {
 	panning:   bool,
 	left_down: bool,
+	marquee:   bool,
 	press_pos: [2]i32,
 	cur_pos:   [2]i32,
-}
-
-Selection :: struct {
-	active:      bool,
-	part_idx:    int,
-	staff_idx:   int,
-	measure_idx: int,
 }
 
 Edit_Mode :: enum {
@@ -332,12 +338,6 @@ Text_Buf :: struct {
 	len: int,
 }
 
-Wizard_Step :: enum {
-	Document,
-	Instruments,
-	Time_And_Key,
-}
-
 Wizard_Field :: enum {
 	None,
 	Title,
@@ -371,41 +371,6 @@ Wizard_Part :: struct {
 	clef:     Clef,
 	is_grand: bool,
 }
-
-Wizard_Action :: enum {
-	None,
-	Redraw,
-	Cancel,
-	Finish,
-}
-
-Wizard_State :: struct {
-	active:         bool,
-	can_cancel:     bool,
-	step:           Wizard_Step,
-	focus:          Wizard_Field,
-	caret:          int,
-	title:          Text_Buf,
-	subtitle:       Text_Buf,
-	composer:       Text_Buf,
-	page_size:      Page_Size_Preset,
-	landscape:      bool,
-	staff_size:     Staff_Size_Preset,
-	parts:          [dynamic]Wizard_Part,
-	selected_part:  int,
-	part_scroll:    int,
-	time_sig:       Rational,
-	fifths:         i8,
-	is_minor:       bool,
-	measure_count:  int,
-	fill_rests:     bool,
-	sel_anchor:     int,
-	selecting_text: bool,
-}
-
-// ---------------------------------------------------------------------------
-// Rendering, Fonts, & Window Event Types
-// ---------------------------------------------------------------------------
 
 Layer_Space :: enum {
 	World,
@@ -579,3 +544,90 @@ Scene :: struct {
 	window: ^Window,
 }
 
+Wizard_Step :: enum {
+	Document,
+	Instruments,
+	Time_And_Key,
+	Open_File,
+}
+
+Wizard_Action :: enum {
+	None,
+	Redraw,
+	Cancel,
+	Finish,
+	Open_File,
+}
+
+Wizard_State :: struct {
+	active:         bool,
+	can_cancel:     bool,
+	step:           Wizard_Step,
+	focus:          Wizard_Field,
+	caret:          int,
+	title:          Text_Buf,
+	subtitle:       Text_Buf,
+	composer:       Text_Buf,
+	page_size:      Page_Size_Preset,
+	landscape:      bool,
+	staff_size:     Staff_Size_Preset,
+	parts:          [dynamic]Wizard_Part,
+	selected_part:  int,
+	part_scroll:    int,
+	time_sig:       Rational,
+	fifths:         i8,
+	is_minor:       bool,
+	measure_count:  int,
+	fill_rests:     bool,
+	sel_anchor:     int,
+	selecting_text: bool,
+	open_files:     [dynamic]string,
+	selected_file:  int,
+	file_scroll:    int,
+}
+
+Wizard_Layout :: struct {
+	card:            Rect,
+	btn_open_mode:   Rect,
+	btn_cancel:      Rect,
+	btn_back:        Rect,
+	btn_next:        Rect,
+	// Step 1: Document
+	field_title:     Rect,
+	field_subtitle:  Rect,
+	field_composer:  Rect,
+	btn_staff_size:  [3]Rect,
+	btn_page_size:   [3]Rect,
+	btn_orient:      [2]Rect,
+	page_preview:    Rect,
+	// Step 2: Instruments
+	btn_ensemble:    [5]Rect,
+	btn_add_part:    [5]Rect,
+	part_list:       Rect,
+	part_rows:       [WIZ_VISIBLE_PART_ROWS]Rect,
+	btn_part_up:     Rect,
+	btn_part_down:   Rect,
+	btn_part_remove: Rect,
+	field_part_name: Rect,
+	btn_part_clef:   [5]Rect,
+	// Step 3: Time & Key
+	btn_ts_preset:   [6]Rect,
+	btn_ts_num_dec:  Rect,
+	btn_ts_num_inc:  Rect,
+	ts_num_box:      Rect,
+	btn_ts_den_dec:  Rect,
+	btn_ts_den_inc:  Rect,
+	ts_den_box:      Rect,
+	ts_preview:      Rect,
+	btn_bars:        [4]Rect,
+	bars_box:        Rect,
+	btn_fill_rests:  Rect,
+	btn_key_mode:    [2]Rect,
+	btn_key_flat:    Rect,
+	btn_key_sharp:   Rect,
+	key_name_box:    Rect,
+	ks_preview:      Rect,
+	// Open File view
+	file_list:       Rect,
+	file_rows:       [WIZ_VISIBLE_FILE_ROWS]Rect,
+}
