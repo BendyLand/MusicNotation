@@ -9,29 +9,89 @@ MIN_HEIGHT    :: 240
 TARGET_WIDTH  :: 800
 TARGET_HEIGHT :: 900
 
-MAX_LAYERS  :: 32
-ATLAS_SIZE  :: 1024
-ATLAS_EM_PX :: f32(128.0)
-TOOLBAR_H   :: f32(36.0)
-STATUS_H    :: f32(24.0)
+DEFAULT_BARS_PER_SYSTEM :: 4
+MAX_SYSTEMS             :: 64
+MAX_LAYERS              :: 32
+ATLAS_SIZE              :: 1024
+ATLAS_EM_PX             :: f32(128.0)
+TEXT_ATLAS_EM_PX        :: f32(80.0)
+TOOLBAR_H               :: f32(36.0)
+STATUS_H                :: f32(24.0)
+PAGE_GAP_PT             :: f32(28.0)
 
-BTN_Y        :: f32(4.0)
-BTN_SIZE     :: f32(28.0)
-BTN_SELECT_X :: f32(8.0)
-BTN_NOTES_X0 :: f32(48.0)
-BTN_STEP_X   :: f32(32.0)
-BTN_REST_X   :: BTN_NOTES_X0 + 6.0 * BTN_STEP_X + 4.0
-BTN_ACC_X0   :: BTN_REST_X + BTN_SIZE + 12.0
-BTN_EXPORT_X :: BTN_ACC_X0 + 3.0 * BTN_STEP_X + 8.0
+BTN_Y           :: f32(4.0)
+BTN_SIZE        :: f32(28.0)
+BTN_NEW_X       :: f32(8.0)
+BTN_SELECT_X    :: BTN_NEW_X + BTN_SIZE + 12.0
+BTN_NOTES_X0    :: BTN_SELECT_X + BTN_SIZE + 12.0
+BTN_STEP_X      :: f32(32.0)
+BTN_REST_X      :: BTN_NOTES_X0 + 6.0 * BTN_STEP_X + 4.0
+BTN_ACC_X0      :: BTN_REST_X + BTN_SIZE + 12.0
+BTN_ADD_BAR_X   :: BTN_ACC_X0 + 3.0 * BTN_STEP_X + 8.0
+BTN_REM_BAR_X   :: BTN_ADD_BAR_X + BTN_STEP_X
+BTN_PUSH_DOWN_X :: BTN_REM_BAR_X + BTN_SIZE + 12.0
+BTN_PULL_UP_X   :: BTN_PUSH_DOWN_X + BTN_STEP_X
+BTN_LOCK_SYS_X  :: BTN_PULL_UP_X + BTN_STEP_X
+BTN_EXPORT_X    :: BTN_LOCK_SYS_X + BTN_SIZE + 12.0
 
-SCORE_PATH :: "demo.toml"
-FONT_PATH  :: "Bravura.otf"
-PDF_PATH   :: "score.pdf"
+Toolbar_Action :: enum {
+	None,
+	New_Score,
+	Tool_Changed,
+	Add_Measure,
+	Remove_Measure,
+	Push_Measure_Down,
+	Pull_Measure_Up,
+	Toggle_System_Lock,
+	Export_Pdf,
+}
+
+Measure_Break :: enum {
+	Auto,
+	Force_Next,
+	Lock_Prev,
+}
+
+System_Layout :: struct {
+	page_idx:      int,
+	start_measure: int,
+	end_measure:   int, // exclusive
+	y:             f32,
+	header_w:      f32,
+	music_x0:      f32,
+	measure_w:     f32,
+}
+
+Score_Layout :: struct {
+	staff_w:        f32,
+	space:          f32,
+	line_thick:     f32,
+	staff_h:        f32,
+	staff_step_y:   f32,
+	system_h:       f32,
+	system_step_y:  f32,
+	first_staff_y:  f32,
+	total_staves:   int,
+	total_measures: int,
+	page_count:     int,
+	page_step_y:    f32,
+	systems:        [MAX_SYSTEMS]System_Layout,
+	system_count:   int,
+}
+
+SCORE_PATH      :: "demo.toml"
+MUSIC_FONT_PATH :: "Bravura.otf"
+TEXT_FONT_PATH  :: "liberation/LiberationMono-Regular.ttf"
+PDF_PATH        :: "score.pdf"
 
 LAYER_PAGE    :: 0
 LAYER_SCORE   :: 1
 LAYER_OVERLAY :: 2
 LAYER_UI      :: 3
+
+TEXT_BUF_MAX          :: 128
+WIZ_MAX_PARTS         :: 16
+WIZ_VISIBLE_PART_ROWS :: 5
 
 // SMuFL codepoints (Bravura)
 SMUFL_G_CLEF                  :: rune(0xE050)
@@ -111,6 +171,10 @@ DIGIT_GLYPHS := [11][5]u8 {
 	{0b000, 0b000, 0b111, 0b000, 0b000}, // -
 }
 
+Rect :: struct {
+	x, y, w, h: f32,
+}
+
 Note_Kind :: enum {
 	Whole,
 	Half,
@@ -166,7 +230,7 @@ Voice :: struct {
 
 Measure_Meta :: struct {
 	time_sig: Rational, // e.g., {4, 4}
-	key_sig:  i8,       // fifths: -7 (Cb) to +7 (C#)
+	key_sig:  i8, // fifths: -7 (Cb) to +7 (C#)
 }
 
 Staff_Measure :: struct {
@@ -197,9 +261,11 @@ Page_Setup :: struct {
 Score :: struct {
 	version:  int,
 	title:    string,
+	subtitle: string,
 	composer: string,
 	page:     Page_Setup,
 	parts:    [dynamic]Part,
+	breaks:   [dynamic]Measure_Break,
 }
 
 Bar_Accidental_State :: struct {
@@ -232,12 +298,6 @@ Accidental_Override :: enum {
 	Sharp,
 }
 
-Toolbar_Action :: enum {
-	None,
-	Tool_Changed,
-	Export_Pdf,
-}
-
 Editor_Tool :: struct {
 	mode:       Edit_Mode,
 	duration:   Note_Kind,
@@ -267,18 +327,85 @@ Note_Target :: struct {
 	effective_dur: Rational,
 }
 
-Score_Layout :: struct {
-	staff_w:        f32,
-	space:          f32,
-	line_thick:     f32,
-	staff_h:        f32,
-	staff_step_y:   f32,
-	first_staff_y:  f32,
-	total_measures: int,
-	header_w:       f32,
-	music_x0:       f32,
-	measure_w:      f32,
+Text_Buf :: struct {
+	buf: [TEXT_BUF_MAX]u8,
+	len: int,
 }
+
+Wizard_Step :: enum {
+	Document,
+	Instruments,
+	Time_And_Key,
+}
+
+Wizard_Field :: enum {
+	None,
+	Title,
+	Subtitle,
+	Composer,
+	Part_Name,
+}
+
+Page_Size_Preset :: enum {
+	Letter,
+	A4,
+	Tabloid,
+}
+
+Staff_Size_Preset :: enum {
+	Small,
+	Medium,
+	Large,
+}
+
+Ensemble_Preset :: enum {
+	Solo,
+	Grand_Staff,
+	Choir_SATB,
+	String_Quartet,
+	Brass_Quintet,
+}
+
+Wizard_Part :: struct {
+	name:     Text_Buf,
+	clef:     Clef,
+	is_grand: bool,
+}
+
+Wizard_Action :: enum {
+	None,
+	Redraw,
+	Cancel,
+	Finish,
+}
+
+Wizard_State :: struct {
+	active:         bool,
+	can_cancel:     bool,
+	step:           Wizard_Step,
+	focus:          Wizard_Field,
+	caret:          int,
+	title:          Text_Buf,
+	subtitle:       Text_Buf,
+	composer:       Text_Buf,
+	page_size:      Page_Size_Preset,
+	landscape:      bool,
+	staff_size:     Staff_Size_Preset,
+	parts:          [dynamic]Wizard_Part,
+	selected_part:  int,
+	part_scroll:    int,
+	time_sig:       Rational,
+	fifths:         i8,
+	is_minor:       bool,
+	measure_count:  int,
+	fill_rests:     bool,
+	sel_anchor:     int,
+	selecting_text: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Rendering, Fonts, & Window Event Types
+// ---------------------------------------------------------------------------
 
 Layer_Space :: enum {
 	World,
@@ -290,11 +417,12 @@ Vertex :: struct {
 	uv:    [2]f32,
 	color: [4]f32,
 	mode:  f32, // 0.0 = solid geometry, 1.0 = alpha glyph
+	tex:   u32, // 0 = solid geometry, otherwise GL texture ID
 }
 
 Camera :: struct {
 	pos:  [2]f32, // World coordinate at the center of the viewport (in points)
-	zoom: f32,    // Pixels per world unit
+	zoom: f32, // Pixels per world unit
 }
 
 Glyph_Metrics :: struct {
@@ -307,6 +435,14 @@ Glyph_Atlas :: struct {
 	tex:        u32,
 	glyphs:     map[rune]Glyph_Metrics,
 	font_bytes: []u8,
+	ascent:     f32,
+	descent:    f32,
+	line_gap:   f32,
+}
+
+Fonts :: struct {
+	music: Glyph_Atlas,
+	text:  Glyph_Atlas,
 }
 
 Pdf_Rect :: struct {
@@ -315,6 +451,7 @@ Pdf_Rect :: struct {
 }
 
 Pdf_Glyph :: struct {
+	font_bytes:         []u8,
 	cp:                 rune,
 	origin_x, origin_y: f32,
 	em_size:            f32,
@@ -327,11 +464,10 @@ Pdf_Cmd :: union {
 }
 
 Layer :: struct {
-	space:     Layer_Space,
-	visible:   bool,
-	atlas_tex: u32,
-	verts:     [dynamic]Vertex,
-	pdf_cmds:  ^[dynamic]Pdf_Cmd,
+	space:    Layer_Space,
+	visible:  bool,
+	verts:    [dynamic]Vertex,
+	pdf_cmds: ^[dynamic]Pdf_Cmd,
 }
 
 Renderer :: struct {
@@ -347,9 +483,16 @@ Renderer :: struct {
 Key :: enum {
 	Unknown,
 	Escape,
+	Enter,
 	Tab,
 	Backspace,
 	Delete,
+	Left,
+	Right,
+	Up,
+	Down,
+	Home,
+	End,
 	Num_0,
 	Num_1,
 	Num_2,
@@ -357,11 +500,14 @@ Key :: enum {
 	Num_4,
 	Num_5,
 	Num_6,
+	A,
 	R,
 	S,
 	E,
 	P,
 	N,
+	L,
+	U,
 	Minus,
 	Equals,
 }
@@ -377,8 +523,14 @@ Event_Quit :: struct {}
 Event_Redraw :: struct {}
 
 Event_Key_Down :: struct {
-	key:  Key,
-	ctrl: bool,
+	key:   Key,
+	ctrl:  bool,
+	shift: bool,
+}
+
+Event_Text_Input :: struct {
+	text: [32]u8,
+	len:  int,
 }
 
 Event_Mouse_Down :: struct {
@@ -404,6 +556,7 @@ Event :: union {
 	Event_Quit,
 	Event_Redraw,
 	Event_Key_Down,
+	Event_Text_Input,
 	Event_Mouse_Down,
 	Event_Mouse_Up,
 	Event_Mouse_Move,
@@ -418,6 +571,7 @@ Window :: struct {
 	win_w, win_h:      i32,
 	draw_w, draw_h:    i32,
 	unlocked_min_size: bool,
+	text_input_active: bool,
 	events:            [dynamic]Event,
 }
 

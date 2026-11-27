@@ -6,11 +6,13 @@ import win "../window"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:strconv"
 
 make_demo :: proc() -> utils.Score {
 	s := utils.Score {
 		version  = utils.FORMAT_VERSION,
 		title    = strings.clone("Demo Score"),
+		subtitle = strings.clone(""),
 		composer = strings.clone("Anonymous"),
 		page     = utils.default_page_setup(),
 	}
@@ -36,6 +38,73 @@ make_demo :: proc() -> utils.Score {
 	return s
 }
 
+@(private = "file")
+build_wizard_staff :: proc(
+	clef: utils.Clef,
+	bars: int,
+	ts: utils.Rational,
+	fifths: i8,
+	fill_rests: bool,
+) -> utils.Staff {
+	staff := utils.Staff {
+		clef = clef,
+	}
+	for _ in 0 ..< bars {
+		sm := utils.Staff_Measure {
+			meta = utils.Measure_Meta {
+				time_sig = ts,
+				key_sig  = fifths,
+			},
+		}
+		if fill_rests {
+			v := utils.Voice{}
+			utils.inject_remainder_rests(&v.entries, 0, ts)
+			append(&sm.voices, v)
+		}
+		append(&staff.measures, sm)
+	}
+	return staff
+}
+
+from_wizard :: proc(wiz: ^utils.Wizard_State) -> utils.Score {
+	s := utils.Score {
+		version  = utils.FORMAT_VERSION,
+		title    = strings.clone(utils.text_buf_str(&wiz.title)),
+		subtitle = strings.clone(utils.text_buf_str(&wiz.subtitle)),
+		composer = strings.clone(utils.text_buf_str(&wiz.composer)),
+		page     = utils.wizard_page_setup(wiz),
+	}
+
+	bars := clamp(wiz.measure_count, 1, 64)
+	ts := wiz.time_sig.num > 0 && wiz.time_sig.den > 0 ? wiz.time_sig : utils.Rational{4, 4}
+	fifths := clamp(wiz.fifths, -7, 7)
+
+	if len(wiz.parts) == 0 {
+		part := utils.Part {
+			name = strings.clone("Treble"),
+		}
+		append(&part.staves, build_wizard_staff(.Treble, bars, ts, fifths, wiz.fill_rests))
+		append(&s.parts, part)
+		return s
+	}
+
+	for &wp in wiz.parts {
+		part := utils.Part {
+			name = strings.clone(utils.text_buf_str(&wp.name)),
+		}
+		if wp.is_grand {
+			append(&part.staves, build_wizard_staff(.Treble, bars, ts, fifths, wiz.fill_rests))
+			append(&part.staves, build_wizard_staff(.Bass, bars, ts, fifths, wiz.fill_rests))
+		}
+		else {
+			append(&part.staves, build_wizard_staff(wp.clef, bars, ts, fifths, wiz.fill_rests))
+		}
+		append(&s.parts, part)
+	}
+
+	return s
+}
+
 load :: proc(path: string) -> (s: utils.Score, ok: bool) {
 	root, err, parsed := toml.parse_file(path)
 	if !parsed {
@@ -52,6 +121,7 @@ load :: proc(path: string) -> (s: utils.Score, ok: bool) {
 	}
 
 	s.title = strings.clone(utils.get_string(root, "title", ""))
+	s.subtitle = strings.clone(utils.get_string(root, "subtitle", ""))
 	s.composer = strings.clone(utils.get_string(root, "composer", ""))
 	s.page = utils.default_page_setup()
 
@@ -106,6 +176,38 @@ load :: proc(path: string) -> (s: utils.Score, ok: bool) {
 		}
 	}
 
+	if layout_tbl, has_layout := utils.get_table(root, "layout"); has_layout {
+		breaks_str := utils.get_string(layout_tbl, "breaks", "")
+		if len(breaks_str) > 0 {
+			tokens := strings.fields(breaks_str)
+			defer delete(tokens)
+			for tok in tokens {
+				colon := strings.index_byte(tok, ':')
+				if colon < 0 {
+					continue
+				}
+				idx, ok_idx := strconv.parse_int(tok[:colon])
+				if !ok_idx || idx <= 0 || idx >= 64 {
+					continue
+				}
+				tag := tok[colon + 1:]
+				brk := utils.Measure_Break.Auto
+				if tag == "next" {
+					brk = .Force_Next
+				}
+				else if tag == "lock" {
+					brk = .Lock_Prev
+				}
+				if brk != .Auto {
+					for len(s.breaks) <= idx {
+						append(&s.breaks, utils.Measure_Break.Auto)
+					}
+					s.breaks[idx] = brk
+				}
+			}
+		}
+	}
+
 	return s, true
 }
 
@@ -117,6 +219,9 @@ save :: proc(s: ^utils.Score, path: string) -> bool {
 	fmt.sbprintfln(&b, "version = %d", s.version)
 	strings.write_string(&b, "title = ")
 	utils.write_toml_string(&b, s.title)
+	strings.write_byte(&b, '\n')
+	strings.write_string(&b, "subtitle = ")
+	utils.write_toml_string(&b, s.subtitle)
 	strings.write_byte(&b, '\n')
 	strings.write_string(&b, "composer = ")
 	utils.write_toml_string(&b, s.composer)
@@ -131,6 +236,30 @@ save :: proc(s: ^utils.Score, path: string) -> bool {
 	fmt.sbprintfln(&b, "margin_left = %g", p.margin_left)
 	fmt.sbprintfln(&b, "margin_right = %g", p.margin_right)
 	fmt.sbprintfln(&b, "staff_space_pt = %g", p.staff_space_pt)
+
+	has_breaks := false
+	for brk in s.breaks {
+		if brk != .Auto {
+			has_breaks = true
+			break
+		}
+	}
+	if has_breaks {
+		strings.write_string(&b, "\n[layout]\nbreaks = \"")
+		first := true
+		for brk, idx in s.breaks {
+			if brk == .Auto {
+				continue
+			}
+			if !first {
+				strings.write_byte(&b, ' ')
+			}
+			first = false
+			tag := brk == .Force_Next ? "next" : "lock"
+			fmt.sbprintf(&b, "%d:%s", idx, tag)
+		}
+		strings.write_string(&b, "\"\n")
+	}
 
 	for &part in s.parts {
 		strings.write_string(&b, "\n[[parts]]\n")
@@ -175,14 +304,9 @@ save :: proc(s: ^utils.Score, path: string) -> bool {
 	return os.write_entire_file(path, b.buf[:]) == nil
 }
 
-save_score :: proc(s: ^utils.Score) {
-	if !save(s, utils.SCORE_PATH) {
-		fmt.eprintfln("Failed to write %s", utils.SCORE_PATH)
-	}
-}
-
 destroy :: proc(s: ^utils.Score) {
 	delete(s.title)
+	delete(s.subtitle)
 	delete(s.composer)
 	for &part in s.parts {
 		delete(part.name)
@@ -201,6 +325,13 @@ destroy :: proc(s: ^utils.Score) {
 		delete(part.staves)
 	}
 	delete(s.parts)
+	delete(s.breaks)
+}
+
+save_score :: proc(s: ^utils.Score) {
+	if !save(s, utils.SCORE_PATH) {
+		fmt.eprintfln("Failed to write %s", utils.SCORE_PATH)
+	}
 }
 
 clear_measure :: proc(sm: ^utils.Staff_Measure) {
@@ -318,10 +449,91 @@ apply_note_click :: proc(
 	return false
 }
 
-export_pdf :: proc(s: ^utils.Score, atlas: ^utils.Glyph_Atlas, path: string) -> bool {
-	if len(atlas.font_bytes) == 0 {
+export_score_pdf :: proc(s: ^utils.Score, fonts: ^utils.Fonts) {
+	if export_pdf(s, fonts, utils.PDF_PATH) {
+		fmt.printfln("Exported %s", utils.PDF_PATH)
+	}
+	else {
+		fmt.eprintfln("Failed to export %s", utils.PDF_PATH)
+	}
+}
+
+destroy_measure :: proc(sm: ^utils.Staff_Measure) {
+	clear_measure(sm)
+	delete(sm.voices)
+	sm.voices = nil
+}
+
+insert_measure :: proc(s: ^utils.Score, at_idx: int) -> bool {
+	total := utils.measure_count(s)
+	if total >= 64 {
 		return false
 	}
+	idx := clamp(at_idx, 0, total)
+
+	for &part in s.parts {
+		for &staff in part.staves {
+			meta := utils.Measure_Meta {
+				time_sig = {4, 4},
+				key_sig  = 0,
+			}
+			if len(staff.measures) > 0 {
+				ref_idx := idx > 0 ? min(idx - 1, len(staff.measures) - 1) : 0
+				meta = staff.measures[ref_idx].meta
+			}
+			new_sm := utils.Staff_Measure {
+				meta = meta,
+			}
+			insert_at := clamp(idx, 0, len(staff.measures))
+			inject_at(&staff.measures, insert_at, new_sm)
+		}
+	}
+
+	for len(s.breaks) < total {
+		append(&s.breaks, utils.Measure_Break.Auto)
+	}
+	inject_at(&s.breaks, idx, utils.Measure_Break.Auto)
+	return true
+}
+
+remove_measure :: proc(s: ^utils.Score, at_idx: int) -> bool {
+	total := utils.measure_count(s)
+	if total <= 1 || at_idx < 0 || at_idx >= total {
+		return false
+	}
+
+	for &part in s.parts {
+		for &staff in part.staves {
+			if at_idx < len(staff.measures) {
+				destroy_measure(&staff.measures[at_idx])
+				ordered_remove(&staff.measures, at_idx)
+			}
+		}
+	}
+
+	if at_idx < len(s.breaks) {
+		ordered_remove(&s.breaks, at_idx)
+	}
+	return true
+}
+
+toggle_measure_break :: proc(s: ^utils.Score, m_idx: int, target: utils.Measure_Break) -> bool {
+	total := utils.measure_count(s)
+	if m_idx <= 0 || m_idx >= total {
+		return false
+	}
+	for len(s.breaks) < total {
+		append(&s.breaks, utils.Measure_Break.Auto)
+	}
+	s.breaks[m_idx] = (s.breaks[m_idx] == target) ? .Auto : target
+	return true
+}
+
+export_pdf :: proc(s: ^utils.Score, fonts: ^utils.Fonts, path: string) -> bool {
+	if len(fonts.music.font_bytes) == 0 {
+		return false
+	}
+	layout := utils.compute_score_layout(s, &fonts.music)
 	cmds: [dynamic]utils.Pdf_Cmd
 	defer delete(cmds)
 
@@ -330,16 +542,141 @@ export_pdf :: proc(s: ^utils.Score, atlas: ^utils.Glyph_Atlas, path: string) -> 
 		visible  = true,
 		pdf_cmds = &cmds,
 	}
-	win.draw_score(&export_layer, s, atlas)
+	win.draw_score(&export_layer, s, fonts)
 
-	return utils.write_pdf_document(path, s.page, atlas.font_bytes, cmds[:])
+	return utils.write_pdf_document(path, s.page, layout.page_count, cmds[:])
 }
 
-export_score_pdf :: proc(s: ^utils.Score, atlas: ^utils.Glyph_Atlas) {
-	if export_pdf(s, atlas, utils.PDF_PATH) {
-		fmt.printfln("Exported %s", utils.PDF_PATH)
-	}
-	else {
-		fmt.eprintfln("Failed to export %s", utils.PDF_PATH)
+ensure_breaks_len :: proc(s: ^utils.Score, total: int) {
+	for len(s.breaks) < total {
+		append(&s.breaks, utils.Measure_Break.Auto)
 	}
 }
+
+is_system_locked :: proc(s: ^utils.Score, sys: utils.System_Layout, total_measures: int) -> bool {
+	if total_measures <= 1 || sys.end_measure <= sys.start_measure {
+		return false
+	}
+	for m in sys.start_measure + 1 ..< sys.end_measure {
+		if m >= len(s.breaks) || s.breaks[m] != .Lock_Prev {
+			return false
+		}
+	}
+	if sys.start_measure > 0 {
+		if sys.start_measure >= len(s.breaks) || s.breaks[sys.start_measure] != .Force_Next {
+			return false
+		}
+	}
+	if sys.end_measure < total_measures {
+		if sys.end_measure >= len(s.breaks) || s.breaks[sys.end_measure] != .Force_Next {
+			return false
+		}
+	}
+	return true
+}
+
+@(private = "file")
+ensure_breaks_len :: proc(s: ^utils.Score, total: int) {
+	for len(s.breaks) < total {
+		append(&s.breaks, utils.Measure_Break.Auto)
+	}
+}
+
+push_measure_next_line :: proc(s: ^utils.Score, layout: ^utils.Score_Layout, m_idx: int) -> bool {
+	total := utils.measure_count(s)
+	sys, ok := utils.find_system_for_measure(layout, m_idx)
+	if !ok || m_idx <= sys.start_measure || m_idx >= total {
+		return false
+	}
+	ensure_breaks_len(s, total)
+	s.breaks[m_idx] = .Force_Next
+	return true
+}
+
+pull_measure_prev_line :: proc(s: ^utils.Score, layout: ^utils.Score_Layout, m_idx: int) -> bool {
+	total := utils.measure_count(s)
+	sys, ok := utils.find_system_for_measure(layout, m_idx)
+	if !ok || m_idx <= 0 || m_idx != sys.start_measure || m_idx >= total {
+		return false
+	}
+	ensure_breaks_len(s, total)
+	s.breaks[m_idx] = .Lock_Prev
+	return true
+}
+
+lock_system :: proc(s: ^utils.Score, layout: ^utils.Score_Layout, m_idx: int) -> bool {
+	total := utils.measure_count(s)
+	sys, ok := utils.find_system_for_measure(layout, m_idx)
+	if !ok || total <= 1 {
+		return false
+	}
+	ensure_breaks_len(s, total)
+	for m in sys.start_measure + 1 ..< sys.end_measure {
+		s.breaks[m] = .Lock_Prev
+	}
+	if sys.start_measure > 0 {
+		s.breaks[sys.start_measure] = .Force_Next
+	}
+	if sys.end_measure < total {
+		s.breaks[sys.end_measure] = .Force_Next
+	}
+	return true
+}
+
+unlock_system :: proc(s: ^utils.Score, layout: ^utils.Score_Layout, m_idx: int) -> bool {
+	sys, ok := utils.find_system_for_measure(layout, m_idx)
+	if !ok {
+		return false
+	}
+	changed := false
+	end_clamped := min(sys.end_measure + 1, len(s.breaks))
+	for m in sys.start_measure ..< end_clamped {
+		if s.breaks[m] != .Auto {
+			s.breaks[m] = .Auto
+			changed = true
+		}
+	}
+	return changed
+}
+
+toggle_system_lock :: proc(s: ^utils.Score, layout: ^utils.Score_Layout, m_idx: int) -> bool {
+	total := utils.measure_count(s)
+	sys, ok := utils.find_system_for_measure(layout, m_idx)
+	if !ok {
+		return false
+	}
+	if utils.is_system_locked(s, sys, total) {
+		return unlock_system(s, layout, m_idx)
+	}
+	return lock_system(s, layout, m_idx)
+}
+
+add_measure_action :: proc(s: ^utils.Score, sel: ^utils.Selection) -> bool {
+	target_idx := sel.active ? sel.measure_idx + 1 : utils.measure_count(s)
+	if !insert_measure(s, target_idx) {
+		return false
+	}
+	if sel.active {
+		sel.measure_idx = target_idx
+	}
+	save_score(s)
+	return true
+}
+
+remove_measure_action :: proc(s: ^utils.Score, sel: ^utils.Selection) -> bool {
+	total := utils.measure_count(s)
+	if total <= 1 {
+		return false
+	}
+	target_idx := sel.active ? sel.measure_idx : total - 1
+	if !remove_measure(s, target_idx) {
+		return false
+	}
+	if sel.active {
+		new_total := utils.measure_count(s)
+		sel.measure_idx = clamp(sel.measure_idx, 0, max(0, new_total - 1))
+	}
+	save_score(s)
+	return true
+}
+
