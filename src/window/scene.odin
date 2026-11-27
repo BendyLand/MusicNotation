@@ -90,3 +90,4 @@ scene_hit_test :: proc(s: ^utils.Scene, cam: utils.Camera, screen_pos: [2]f32) -
 
 	return -1
 }
+

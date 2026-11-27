@@ -13,7 +13,7 @@ run:
     fi
 
 clean:
-    rm notation src.bin summary.txt
+    rm notation src.bin summary.txt demo.toml score.pdf
 
 crash:
     lash debug
